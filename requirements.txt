@@ -7,3 +7,4 @@ bcrypt
 requests
 openpyxl
 itsdangerous
+python-multipart
