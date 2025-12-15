@@ -1,27 +1,13 @@
 version: "3.9"
 
 services:
-  mealie-recipe-crawler:
-    build: .
-    container_name: mealie-recipe-crawler
+  app:
+    build:
     ports:
       - "8222:8222"
     environment:
-      # Change this to a long random string. Example:
-      # python -c "import secrets; print(secrets.token_hex(32))"
-      - SESSION_SECRET=;DTIIv|k.lA,2vuRjCqugxsPXB~mz}
-      # Optional: control initial admin password on first run (otherwise it will be generated and printed in logs)
-      # - ADMIN_PASS=change-this-password
-      # Optional: show version in footer (GitHub releases)
-      # - GITHUB_REPO=YOURUSER/mealie-recipe-crawler
-      # Optional: change admin username
-      # - ADMIN_USER=admin
+      SESSION_SECRET: ;DTIIv|k.lA,2vuRjCqugxsPXB~mz}
     volumes:
       - ./data:/app/data
     networks:
       - mealie_crawler_net
-    restart: unless-stopped
-
-networks:
-  mealie_crawler_net:
-    driver: bridge
