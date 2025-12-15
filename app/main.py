@@ -275,22 +275,23 @@ def settings_page(request: Request, user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
 
-    # Load app settings
     cur.execute("SELECT key, value FROM settings")
     settings = {r["key"]: r["value"] for r in cur.fetchall()}
 
-    # Load sites
     cur.execute("SELECT * FROM sites ORDER BY id ASC")
     sites = cur.fetchall()
 
-    # Load active site
     cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
     row = cur.fetchone()
-    active_site = None
 
-    if row:
-        cur.execute("SELECT * FROM sites WHERE id=?", (int(row["value"]),))
-        active_site = cur.fetchone()
+    active_site = None
+    if row and row["value"]:
+        try:
+            active_id = int(row["value"])
+            cur.execute("SELECT * FROM sites WHERE id=?", (active_id,))
+            active_site = cur.fetchone()
+        except ValueError:
+            active_site = None
 
     conn.close()
 
@@ -304,6 +305,7 @@ def settings_page(request: Request, user=Depends(current_user)):
             "active_site": active_site,
         }
     )
+
 
 
 @app.get("/recipes", response_class=HTMLResponse)
