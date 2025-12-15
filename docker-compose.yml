@@ -7,7 +7,7 @@ services:
       - "8222:8222"
     environment:
       SESSION_SECRET: CHANGE_ME_TO_A_LONG_RANDOM_SECRET
-      # Optional:
+    Optional:
       ADMIN_USER: admin
       ADMIN_PASS: admin123
       GITHUB_REPO: https://github.com/anthonyhales/mealie_recipe_crawler/
