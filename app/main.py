@@ -436,19 +436,35 @@ def api_sites_delete(payload: dict = Body(...), user=Depends(current_user)):
 
 @app.post("/api/sites/set-active")
 def api_sites_set_active(payload: dict = Body(...), user=Depends(current_user)):
-    site_id = payload.get("site_id")
-    if not site_id:
-        raise HTTPException(400, "site_id required")
+    raw = payload.get("site_id")
+    if raw is None or str(raw).strip() == "":
+        raise HTTPException(status_code=400, detail="site_id required")
+
+    try:
+        site_id = int(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="site_id must be an integer")
 
     conn = db()
     cur = conn.cursor()
+
+    # Verify the site exists
+    cur.execute("SELECT id, name, start_url FROM sites WHERE id=?", (site_id,))
+    site = cur.fetchone()
+    if not site:
+        conn.close()
+        raise HTTPException(status_code=404, detail="site not found")
+
+    # Save active site id
     cur.execute(
-        "INSERT OR REPLACE INTO settings (key,value) VALUES ('active_site_id',?)",
-        (str(site_id),),
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_site_id', ?)",
+        (str(site_id),)
     )
     conn.commit()
     conn.close()
-    return {"ok": True}
+
+    log("INFO", f"Active site set: {site['name']} (id={site_id})", url=site["start_url"], site_id=site_id)
+    return {"ok": True, "active_site_id": site_id}
 
 
 @app.post("/api/sites/prescan")
@@ -469,40 +485,30 @@ def crawl_start(user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
 
-    # Load active site id
     cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
     row = cur.fetchone()
-
-    if not row:
+    if not row or not row["value"]:
         conn.close()
+        log("ERROR", "Crawl refused: no active site selected")
         raise HTTPException(status_code=400, detail="No active site selected")
 
-    active_site_id = int(row["value"])
+    try:
+        site_id = int(row["value"])
+    except ValueError:
+        conn.close()
+        log("ERROR", f"Crawl refused: active_site_id is invalid ({row['value']})")
+        raise HTTPException(status_code=400, detail="Active site id is invalid")
 
-    # Load site
-    cur.execute("SELECT * FROM sites WHERE id=?", (active_site_id,))
+    cur.execute("SELECT * FROM sites WHERE id=?", (site_id,))
     site = cur.fetchone()
     conn.close()
 
     if not site:
+        log("ERROR", f"Crawl refused: active site not found (id={site_id})", site_id=site_id)
         raise HTTPException(status_code=400, detail="Active site not found")
 
-    # Log with site context
-    log(
-        "INFO",
-        f"Crawl started for site '{site['name']}'",
-        site_id=site["id"],
-        url=site["start_url"],
-    )
-
-    return {
-        "ok": True,
-        "site": {
-            "id": site["id"],
-            "name": site["name"],
-            "start_url": site["start_url"],
-        },
-    }
+    log("INFO", f"Crawl started for '{site['name']}'", url=site["start_url"], site_id=site_id)
+    return {"ok": True, "site_id": site_id, "start_url": site["start_url"]}
 
 
 @app.post("/api/crawl/stop")
