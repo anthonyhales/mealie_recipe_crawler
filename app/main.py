@@ -232,7 +232,24 @@ def dashboard(request: Request, user=Depends(current_user)):
         },
     )
 
-
+# -----------------------------
+# API – Crawl / Progress
+# -----------------------------
+@app.get("/api/progress")
+def api_progress(user=Depends(current_user)):
+    return {
+        "crawl": {
+            "status": "idle",
+            "pages": 0,
+            "recipes": 0,
+        },
+        "upload": {
+            "status": "idle",
+            "done": 0,
+            "total": 0,
+        }
+    }
+    
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, user=Depends(current_user)):
     conn = db()
@@ -336,22 +353,35 @@ def api_sites_load(user=Depends(current_user)):
 def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-    cur.execute("DELETE FROM sites")
-    cur.execute(
-        "INSERT INTO sites VALUES (NULL,?,?,?,?,?,?)",
-        (
-            payload.get("name", "Default"),
-            payload.get("start_url", ""),
-            payload.get("recipe_pattern", ""),
-            payload.get("ingredients_selector", ""),
-            payload.get("method_selector", ""),
-            datetime.datetime.utcnow().isoformat(),
-        ),
-    )
+
+    cur.execute("""
+        INSERT OR REPLACE INTO sites (
+            id,
+            name,
+            start_url,
+            recipe_pattern,
+            ingredients_selector,
+            method_selector,
+            created_at
+        ) VALUES (
+            (SELECT id FROM sites ORDER BY id ASC LIMIT 1),
+            ?,?,?,?,?,?
+        )
+    """, (
+        payload.get("name", "Default Site"),
+        payload.get("start_url", ""),
+        payload.get("recipe_pattern", ""),
+        payload.get("ingredients_selector", ""),
+        payload.get("method_selector", ""),
+        datetime.datetime.utcnow().isoformat(),
+    ))
+
     conn.commit()
     conn.close()
-    log("INFO", "Site saved")
+
+    log("INFO", "Site saved", url=payload.get("start_url"))
     return {"ok": True}
+
 
 
 @app.post("/api/sites/prescan")
