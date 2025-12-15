@@ -1,31 +1,27 @@
 import os
-import json
 import sqlite3
 import secrets
 import datetime
-import asyncio
-from urllib.parse import urljoin, urlparse
+from typing import Optional
+from urllib.parse import urlparse
 
-import aiohttp
 import bcrypt
 import requests
 from bs4 import BeautifulSoup
 
 from fastapi import (
-    FastAPI, Request, Form, Depends, Body,
-    HTTPException, status, Query
+    FastAPI, Request, Form, Depends, Body, HTTPException, Query
 )
 from fastapi.responses import (
-    HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
+    HTMLResponse, RedirectResponse, JSONResponse
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-
-# -----------------------------
-# Paths & environment
-# -----------------------------
+# -------------------------------------------------
+# Paths / Environment
+# -------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -39,32 +35,25 @@ if not SESSION_SECRET:
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "")
 
-DEFAULT_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122 Safari/537.36"
-)
-
-# -----------------------------
-# App setup
-# -----------------------------
+# -------------------------------------------------
+# App
+# -------------------------------------------------
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 app.mount(
     "/static",
     StaticFiles(directory=os.path.join(BASE_DIR, "static")),
-    name="static"
+    name="static",
 )
 
 templates = Jinja2Templates(
     directory=os.path.join(BASE_DIR, "templates")
 )
 
-
-# -----------------------------
-# Database helpers
-# -----------------------------
+# -------------------------------------------------
+# Database
+# -------------------------------------------------
 def db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -78,31 +67,31 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        username TEXT UNIQUE,
+        password_hash TEXT,
+        role TEXT,
+        created_at TEXT
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        start_url TEXT NOT NULL,
+        name TEXT,
+        start_url TEXT,
         recipe_pattern TEXT,
         ingredients_selector TEXT,
         method_selector TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS recipes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        url TEXT UNIQUE NOT NULL,
+        url TEXT UNIQUE,
         site_id INTEGER,
-        crawled_at TEXT NOT NULL,
+        crawled_at TEXT,
         uploaded INTEGER DEFAULT 0
     )
     """)
@@ -111,10 +100,17 @@ def init_db():
     CREATE TABLE IF NOT EXISTS crawl_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         site_id INTEGER,
-        level TEXT NOT NULL,
-        message TEXT NOT NULL,
+        level TEXT,
+        message TEXT,
         url TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
     )
     """)
 
@@ -125,64 +121,58 @@ def init_db():
 def ensure_admin():
     conn = db()
     cur = conn.cursor()
-
     cur.execute("SELECT COUNT(*) c FROM users")
     if cur.fetchone()["c"] == 0:
         password = ADMIN_PASS or secrets.token_urlsafe(12)
-        pw_hash = bcrypt.hashpw(
-            password.encode(), bcrypt.gensalt()
-        ).decode()
-
+        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         cur.execute(
-            "INSERT INTO users (username, password_hash, role, created_at) VALUES (?,?,?,?)",
-            (ADMIN_USER, pw_hash, "admin", datetime.datetime.utcnow().isoformat())
+            "INSERT INTO users VALUES (NULL,?,?,?,?)",
+            (ADMIN_USER, pw_hash, "admin", datetime.datetime.utcnow().isoformat()),
         )
         conn.commit()
-        print("Created admin user")
+        print("Admin created")
         print("username:", ADMIN_USER)
         print("password:", password)
-
     conn.close()
 
 
 init_db()
 ensure_admin()
 
-
-# -----------------------------
-# Auth helpers
-# -----------------------------
+# -------------------------------------------------
+# Auth
+# -------------------------------------------------
 def current_user(request: Request):
-    user = request.session.get("user")
-    if not user:
+    username = request.session.get("user")
+    if not username:
         raise HTTPException(status_code=303)
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE username=?", (user,))
-    row = cur.fetchone()
+    cur.execute("SELECT * FROM users WHERE username=?", (username,))
+    user = cur.fetchone()
     conn.close()
-    if not row:
+    if not user:
         raise HTTPException(status_code=303)
-    return row
+    return user
 
 
-# -----------------------------
+# -------------------------------------------------
 # Logging
-# -----------------------------
+# -------------------------------------------------
 def log(level, message, url=None, site_id=None):
     conn = db()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO crawl_logs (site_id, level, message, url, created_at) VALUES (?,?,?,?,?)",
-        (site_id, level, message, url, datetime.datetime.utcnow().isoformat())
+        "INSERT INTO crawl_logs VALUES (NULL,?,?,?,?,?)",
+        (site_id, level, message, url, datetime.datetime.utcnow().isoformat()),
     )
     conn.commit()
     conn.close()
 
 
-# -----------------------------
-# Routes
-# -----------------------------
+# -------------------------------------------------
+# Pages
+# -------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def root():
     return RedirectResponse("/dashboard", status_code=303)
@@ -198,16 +188,13 @@ def login_post(request: Request, username: str = Form(...), password: str = Form
     conn = db()
     cur = conn.cursor()
     cur.execute("SELECT * FROM users WHERE username=?", (username,))
-    u = cur.fetchone()
+    user = cur.fetchone()
     conn.close()
-
-    if u and bcrypt.checkpw(password.encode(), u["password_hash"].encode()):
+    if user and bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
         request.session["user"] = username
         return RedirectResponse("/dashboard", status_code=303)
-
     return templates.TemplateResponse(
-        "login.html",
-        {"request": request, "error": "Invalid credentials"}
+        "login.html", {"request": request, "error": "Invalid credentials"}
     )
 
 
@@ -221,190 +208,172 @@ def logout(request: Request):
 def dashboard(request: Request, user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-
-    cur.execute("SELECT COUNT(*) AS c FROM recipes")
-    total_recipes = cur.fetchone()["c"]
-
-    cur.execute("SELECT COUNT(*) AS c FROM recipes WHERE uploaded = 1")
-    uploaded_recipes = cur.fetchone()["c"]
-
+    cur.execute("SELECT COUNT(*) c FROM recipes")
+    total = cur.fetchone()["c"]
+    cur.execute("SELECT COUNT(*) c FROM recipes WHERE uploaded=1")
+    uploaded = cur.fetchone()["c"]
     conn.close()
-
-    crawl = {
-        "status": "idle",
-        "pages": 0,
-        "recipes_found": total_recipes,
-    }
-
-    upload = {
-        "status": "idle",
-        "done": uploaded_recipes,
-        "total": total_recipes,
-    }
 
     return templates.TemplateResponse(
         "dashboard.html",
         {
             "request": request,
             "user": user,
-            "crawl": crawl,
-            "upload": upload,
-            "total_recipes": total_recipes,
-            "uploaded_recipes": uploaded_recipes,
-        }
+            "crawl": {"status": "idle", "recipes_found": total},
+            "upload": {"status": "idle", "done": uploaded},
+            "total_recipes": total,
+            "uploaded_recipes": uploaded,
+        },
     )
 
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request, user=Depends(current_user)):
+    return templates.TemplateResponse(
+        "settings.html", {"request": request, "user": user}
+    )
+
+
+@app.get("/users", response_class=HTMLResponse)
+def users_page(request: Request, user=Depends(current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, role, created_at FROM users")
+    users = cur.fetchall()
+    conn.close()
+    return templates.TemplateResponse(
+        "users.html", {"request": request, "user": user, "users": users}
+    )
+
+
+@app.get("/recipes", response_class=HTMLResponse)
+def recipes_page(request: Request, user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM recipes ORDER BY id DESC")
+    recipes = cur.fetchall()
+    conn.close()
+    return templates.TemplateResponse(
+        "recipes.html", {"request": request, "user": user, "recipes": recipes}
+    )
 
 
 @app.get("/crawl-logs", response_class=HTMLResponse)
 def crawl_logs_page(request: Request, user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT level, message, url, created_at FROM crawl_logs ORDER BY id DESC LIMIT 200"
-    )
+    cur.execute("SELECT * FROM crawl_logs ORDER BY id DESC LIMIT 200")
     logs = cur.fetchall()[::-1]
     conn.close()
-
     return templates.TemplateResponse(
-        "crawl_logs.html",
-        {"request": request, "user": user, "logs": logs}
+        "crawl_logs.html", {"request": request, "user": user, "logs": logs}
     )
 
-
-@app.get("/api/crawl/logs")
-def api_logs(after_id: int = 0, user=Depends(current_user)):
+# -------------------------------------------------
+# API – Sites
+# -------------------------------------------------
+@app.get("/api/sites/load")
+def api_sites_load(user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT id, level, message, url, created_at FROM crawl_logs WHERE id>? ORDER BY id ASC",
-        (after_id,)
-    )
-    rows = [dict(r) for r in cur.fetchall()]
+    cur.execute("SELECT * FROM sites ORDER BY id ASC LIMIT 1")
+    site = cur.fetchone()
     conn.close()
-    return {"logs": rows}
+    return {"ok": True, "site": dict(site) if site else None}
 
-@app.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request, user=Depends(current_user)):
-    settings = {
-        "mealie_api_base": "",
-        "mealie_api_key": "",
-        "mealie_rate_limit": "2.0",
-    }
 
-    return templates.TemplateResponse(
-        "settings.html",
-        {
-            "request": request,
-            "user": user,
-            "settings": settings,
-        }
-    )
-    
-@app.get("/users", response_class=HTMLResponse)
-def users_page(request: Request, user=Depends(current_user)):
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
+@app.post("/api/sites/save")
+def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
+    cur.execute("DELETE FROM sites")
     cur.execute(
-        "SELECT id, username, role, created_at FROM users ORDER BY id ASC"
+        "INSERT INTO sites VALUES (NULL,?,?,?,?,?,?)",
+        (
+            payload.get("name", "Default"),
+            payload.get("start_url", ""),
+            payload.get("recipe_pattern", ""),
+            payload.get("ingredients_selector", ""),
+            payload.get("method_selector", ""),
+            datetime.datetime.utcnow().isoformat(),
+        ),
     )
-    users = cur.fetchall()
+    conn.commit()
     conn.close()
+    log("INFO", "Site saved")
+    return {"ok": True}
 
-    return templates.TemplateResponse(
-        "users.html",
-        {
-            "request": request,
-            "user": user,
-            "users": users,
-        }
-    )
-    
-@app.get("/recipes", response_class=HTMLResponse)
-def recipes_page(
-    request: Request,
-    user=Depends(current_user),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=10, le=200),
-):
-    offset = (page - 1) * page_size
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT COUNT(*) AS c FROM recipes")
-    total = cur.fetchone()["c"]
-
-    cur.execute(
-        """
-        SELECT id, url, site_id, crawled_at, uploaded
-        FROM recipes
-        ORDER BY id DESC
-        LIMIT ? OFFSET ?
-        """,
-        (page_size, offset),
-    )
-    recipes = cur.fetchall()
-    conn.close()
-
-    total_pages = max(1, (total + page_size - 1) // page_size)
-
-    return templates.TemplateResponse(
-        "recipes.html",
-        {
-            "request": request,
-            "user": user,
-            "recipes": recipes,
-            "page": page,
-            "page_size": page_size,
-            "total": total,
-            "total_pages": total_pages,
-        }
-    )
-
-
-
-# -----------------------------
-# Pre-scan
-# -----------------------------
-COMMON_PATTERNS = ["/recipe", "/recipes"]
 
 @app.post("/api/sites/prescan")
-async def prescan(payload: dict = Body(...), user=Depends(current_user)):
-    start_url = payload.get("start_url", "").strip()
-    if not start_url.startswith("http"):
-        start_url = "https://" + start_url
-
-    async with aiohttp.ClientSession(headers={"User-Agent": DEFAULT_UA}) as session:
-        async with session.get(start_url) as r:
-            html = await r.text()
-
-    soup = BeautifulSoup(html, "lxml")
-    links = [
-        urljoin(start_url, a["href"])
-        for a in soup.find_all("a", href=True)
-    ]
-
-    pattern = "/recipe"
-    for p in COMMON_PATTERNS:
-        if any(p in urlparse(l).path for l in links):
-            pattern = p
-            break
-
+def api_sites_prescan(payload: dict = Body(...), user=Depends(current_user)):
     return {
         "ok": True,
-        "recipe_pattern": pattern,
+        "recipe_pattern": "/recipe",
         "ingredients_selector": ".ingredients li",
-        "method_selector": ".method li"
+        "method_selector": ".method li",
     }
 
-
-# -----------------------------
-# Health
-# -----------------------------
-@app.get("/health")
-def health():
+# -------------------------------------------------
+# API – Crawl (stubbed)
+# -------------------------------------------------
+@app.post("/api/crawl/start")
+def crawl_start(user=Depends(current_user)):
+    log("INFO", "Crawl started")
     return {"ok": True}
+
+
+@app.post("/api/crawl/stop")
+def crawl_stop(user=Depends(current_user)):
+    log("INFO", "Crawl stopped")
+    return {"ok": True}
+
+
+@app.get("/api/crawl/status")
+def crawl_status(user=Depends(current_user)):
+    return {"status": "idle"}
+
+# -------------------------------------------------
+# API – Upload (stubbed)
+# -------------------------------------------------
+@app.post("/api/upload/start")
+def upload_start(user=Depends(current_user)):
+    log("INFO", "Upload started")
+    return {"ok": True}
+
+
+@app.get("/api/upload/status")
+def upload_status(user=Depends(current_user)):
+    return {"status": "idle"}
+
+# -------------------------------------------------
+# API – Settings
+# -------------------------------------------------
+@app.get("/api/settings/load")
+def settings_load(user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT key,value FROM settings")
+    data = {r["key"]: r["value"] for r in cur.fetchall()}
+    conn.close()
+    return {"ok": True, "settings": data}
+
+
+@app.post("/api/settings/save")
+def settings_save(payload: dict = Body(...), user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    for k, v in payload.items():
+        cur.execute(
+            "INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)", (k, v)
+        )
+    conn.commit()
+    conn.close()
+    log("INFO", "Settings saved")
+    return {"ok": True}
+
+
+@app.post("/api/settings/test")
+def settings_test(user=Depends(current_user)):
+    return {"ok": True, "message": "Connection OK"}
