@@ -18,4 +18,10 @@ services:
       # - ADMIN_USER=admin
     volumes:
       - ./data:/app/data
+    networks:
+      - mealie_crawler_net
     restart: unless-stopped
+
+networks:
+  mealie_crawler_net:
+    driver: bridge
