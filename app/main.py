@@ -141,7 +141,7 @@ cur.execute("CREATE INDEX IF NOT EXISTS idx_crawl_logs_site_id ON crawl_logs(sit
 cur.execute("CREATE INDEX IF NOT EXISTS idx_crawl_logs_id ON crawl_logs(id)")
 
 conn.commit()
-    conn.close()
+conn.close()
 
 def get_setting(key: str, default=None):
     conn = db()
