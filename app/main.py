@@ -307,6 +307,48 @@ def users_page(request: Request, user=Depends(current_user)):
             "users": users,
         }
     )
+    
+@app.get("/recipes", response_class=HTMLResponse)
+def recipes_page(
+    request: Request,
+    user=Depends(current_user),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
+):
+    offset = (page - 1) * page_size
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM recipes")
+    total = cur.fetchone()["c"]
+
+    cur.execute(
+        """
+        SELECT id, url, site_id, crawled_at, uploaded
+        FROM recipes
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (page_size, offset),
+    )
+    recipes = cur.fetchall()
+    conn.close()
+
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
+    return templates.TemplateResponse(
+        "recipes.html",
+        {
+            "request": request,
+            "user": user,
+            "recipes": recipes,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        }
+    )
 
 
 
