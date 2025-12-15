@@ -9,7 +9,7 @@ services:
       SESSION_SECRET: CHANGE_ME_TO_A_LONG_RANDOM_SECRET
       ADMIN_USER: admin
       ADMIN_PASS: admin123
-      GITHUB_REPO: https://github.com/anthonyhales/mealie_recipe_crawler/
+      GITHUB_REPO: anthonyhales/mealie_recipe_crawler/
     volumes:
       - ./data:/app/data
     restart: unless-stopped
