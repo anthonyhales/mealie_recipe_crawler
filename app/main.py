@@ -229,8 +229,19 @@ def dashboard(request: Request, user=Depends(current_user)):
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT key, value FROM settings")
+    settings = {r["key"]: r["value"] for r in cur.fetchall()}
+    conn.close()
+
     return templates.TemplateResponse(
-        "settings.html", {"request": request, "user": user}
+        "settings.html",
+        {
+            "request": request,
+            "user": user,
+            "settings": settings,
+        }
     )
 
 
@@ -249,15 +260,46 @@ def users_page(request: Request, user=Depends(current_user)):
 
 
 @app.get("/recipes", response_class=HTMLResponse)
-def recipes_page(request: Request, user=Depends(current_user)):
+def recipes_page(
+    request: Request,
+    user=Depends(current_user),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=10, le=200),
+):
+    offset = (page - 1) * page_size
+
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM recipes ORDER BY id DESC")
+
+    cur.execute("SELECT COUNT(*) c FROM recipes")
+    total = cur.fetchone()["c"]
+
+    cur.execute(
+        """
+        SELECT * FROM recipes
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (page_size, offset),
+    )
     recipes = cur.fetchall()
     conn.close()
+
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
     return templates.TemplateResponse(
-        "recipes.html", {"request": request, "user": user, "recipes": recipes}
+        "recipes.html",
+        {
+            "request": request,
+            "user": user,
+            "recipes": recipes,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        }
     )
+
 
 
 @app.get("/crawl-logs", response_class=HTMLResponse)
