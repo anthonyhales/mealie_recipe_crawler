@@ -347,13 +347,24 @@ def crawl_logs_page(request: Request, user=Depends(current_user)):
 def api_sites_load(user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
+
     cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
     row = cur.fetchone()
-    active_site_id = int(row["value"]) if row else None
-    cur.execute("SELECT * FROM sites ORDER BY id ASC")
-    sites = [dict(r) for r in cur.fetchall()]
+    active_id = int(row["value"]) if row else None
+
+    site = None
+    if active_id:
+        cur.execute("SELECT * FROM sites WHERE id=?", (active_id,))
+        site = cur.fetchone()
+
     conn.close()
-    return {"ok": True, "sites": sites, "active_site_id": active_site_id}
+
+    return {
+        "ok": True,
+        "active_site_id": active_id,
+        "site": dict(site) if site else None,
+    }
+
 
 
 @app.post("/api/sites/save")
