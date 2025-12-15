@@ -238,10 +238,13 @@ def logout(request: Request):
 def dashboard(request: Request, user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
+
     cur.execute("SELECT COUNT(*) c FROM recipes")
     total = cur.fetchone()["c"]
+
     cur.execute("SELECT COUNT(*) c FROM recipes WHERE uploaded=1")
     uploaded = cur.fetchone()["c"]
+
     conn.close()
 
     return templates.TemplateResponse(
@@ -249,10 +252,24 @@ def dashboard(request: Request, user=Depends(current_user)):
         {
             "request": request,
             "user": user,
+
+            # 👇 REQUIRED by dashboard.html
+            "crawl": {
+                "status": "idle",
+                "pages": 0,
+                "recipes": total,
+            },
+            "upload": {
+                "status": "idle",
+                "done": uploaded,
+                "total": total,
+            },
+
             "total_recipes": total,
             "uploaded_recipes": uploaded,
         },
     )
+
 
 
 @app.get("/settings", response_class=HTMLResponse)
