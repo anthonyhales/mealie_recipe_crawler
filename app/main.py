@@ -365,7 +365,14 @@ def api_sites_load(user=Depends(current_user)):
         "site": dict(site) if site else None,
     }
 
-
+@app.get("/api/sites/list")
+def api_sites_list(user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name FROM sites ORDER BY id ASC")
+    sites = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return {"ok": True, "sites": sites}
 
 @app.post("/api/sites/save")
 def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
