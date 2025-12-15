@@ -433,7 +433,7 @@ def api_sites_set_active(payload: dict = Body(...), user=Depends(current_user)):
     log("INFO", f"Active site set to {site_id}")
     return {"ok": True}
     
-    @app.get("/api/sites/load")
+@app.get("/api/sites/load")
 def api_sites_load(user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
