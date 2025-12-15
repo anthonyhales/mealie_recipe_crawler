@@ -466,11 +466,43 @@ def api_sites_prescan(payload: dict = Body(...), user=Depends(current_user)):
 # -------------------------------------------------
 @app.post("/api/crawl/start")
 def crawl_start(user=Depends(current_user)):
-    site = get_active_site()
+    conn = db()
+    cur = conn.cursor()
+
+    # Load active site id
+    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
+    row = cur.fetchone()
+
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No active site selected")
+
+    active_site_id = int(row["value"])
+
+    # Load site
+    cur.execute("SELECT * FROM sites WHERE id=?", (active_site_id,))
+    site = cur.fetchone()
+    conn.close()
+
     if not site:
-        raise HTTPException(400, "No active site selected")
-    log("INFO", f"Crawl started for {site['name']}", site_id=site["id"])
-    return {"ok": True}
+        raise HTTPException(status_code=400, detail="Active site not found")
+
+    # Log with site context
+    log(
+        "INFO",
+        f"Crawl started for site '{site['name']}'",
+        site_id=site["id"],
+        url=site["start_url"],
+    )
+
+    return {
+        "ok": True,
+        "site": {
+            "id": site["id"],
+            "name": site["name"],
+            "start_url": site["start_url"],
+        },
+    }
 
 
 @app.post("/api/crawl/stop")
