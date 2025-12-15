@@ -8,9 +8,9 @@ services:
     environment:
       SESSION_SECRET: CHANGE_ME_TO_A_LONG_RANDOM_SECRET
       # Optional:
-      # ADMIN_USER: admin
-      # ADMIN_PASS: admin123
-      # GITHUB_REPO: youruser/mealie-recipe-crawler
+      ADMIN_USER: admin
+      ADMIN_PASS: admin123
+      GITHUB_REPO: https://github.com/anthonyhales/mealie_recipe_crawler/
     volumes:
       - ./data:/app/data
     restart: unless-stopped
