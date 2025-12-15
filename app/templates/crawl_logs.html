@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% set active = 'crawl_logs' %}
+{% block content %}
+<div class="d-sm-flex align-items-center justify-content-between mb-3">
+  <h1 class="h3 mb-0 text-gray-800">Crawl Logs</h1>
+  <div class="d-flex align-items-center">
+    <select id="siteSel" class="form-control form-control-sm mr-2" onchange="changeSite()">
+      <option value="">All sites</option>
+      {% for s in sites %}
+        <option value="{{ s.id }}" {% if site_id and s.id==site_id %}selected{% endif %}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-sm btn-outline-secondary mr-2" onclick="togglePause()" id="pauseBtn">Pause</button>
+    <button class="btn btn-sm btn-outline-danger" onclick="clearLogs()">Clear</button>
+  </div>
+</div>
+
+<div class="card shadow mb-4">
+  <div class="card-header py-2 d-flex justify-content-between align-items-center">
+    <div class="small text-muted">Live crawl output (stored in SQLite). Scroll up to pause auto-scroll.</div>
+    <div class="small">
+      <span class="badge badge-success">INFO</span>
+      <span class="badge badge-warning">WARN</span>
+      <span class="badge badge-danger">ERROR</span>
+    </div>
+  </div>
+  <div class="card-body p-0">
+    <div id="logBox" style="height: 520px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 12px;">
+      {% for l in initial_logs %}
+        <div class="log-row px-3 py-1 border-bottom {{ 'log-' + (l.level|lower) }}">
+          <span class="text-muted">[{{ l.created_at }}]</span>
+          <span class="font-weight-bold">{{ l.level }}</span>
+          <span class="ml-2">{{ l.message }}</span>
+          {% if l.url %}
+            <span class="ml-2 text-truncate d-inline-block" style="max-width: 600px;">
+              <a target="_blank" href="{{ l.url }}">{{ l.url }}</a>
+            </span>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<style>
+.log-info  { background: rgba(28, 200, 138, 0.06); }
+.log-warn  { background: rgba(246, 194, 62, 0.08); }
+.log-error { background: rgba(231, 74, 59, 0.08); }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let lastId = 0;
+let paused = false;
+const siteId = "{{ site_id or '' }}";
+{% if initial_logs and initial_logs|length > 0 %}
+lastId = {{ initial_logs[-1].id }};
+{% endif %}
+
+function isNearBottom(el){
+  return (el.scrollHeight - el.scrollTop - el.clientHeight) < 80;
+}
+function escapeHtml(s){
+  return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function appendLog(l){
+  const box = document.getElementById("logBox");
+  const stick = isNearBottom(box);
+
+  const div = document.createElement("div");
+  div.className = "log-row px-3 py-1 border-bottom log-" + (l.level||"INFO").toLowerCase();
+  const urlPart = l.url ? ` <span class="ml-2 text-truncate d-inline-block" style="max-width:600px;"><a target="_blank" href="${l.url}">${l.url}</a></span>` : "";
+  div.innerHTML = `<span class="text-muted">[${l.created_at}]</span> <span class="font-weight-bold">${l.level}</span> <span class="ml-2">${escapeHtml(l.message||"")}</span>${urlPart}`;
+  box.appendChild(div);
+
+  while(box.children.length > 1500){ box.removeChild(box.firstChild); }
+  if(!paused && stick){ box.scrollTop = box.scrollHeight; }
+}
+async function poll(){
+  if(paused) return;
+  try{
+    const qs = new URLSearchParams();
+    qs.set("after_id", String(lastId));
+    if(siteId) qs.set("site_id", siteId);
+    const res = await fetch("/api/crawl/logs?" + qs.toString());
+    const data = await res.json();
+    (data.logs || []).forEach(l => {
+      lastId = Math.max(lastId, l.id);
+      appendLog(l);
+    });
+  }catch(e){}
+}
+setInterval(poll, 1500);
+
+document.getElementById("logBox").addEventListener("scroll", function(){
+  if(!isNearBottom(this)){
+    paused = true;
+    document.getElementById("pauseBtn").innerText = "Resume";
+  }
+});
+
+function togglePause(){
+  paused = !paused;
+  document.getElementById("pauseBtn").innerText = paused ? "Resume" : "Pause";
+  if(!paused){
+    const box = document.getElementById("logBox");
+    box.scrollTop = box.scrollHeight;
+  }
+}
+function changeSite(){
+  const v = document.getElementById("siteSel").value;
+  window.location.href = v ? ("/crawl-logs?site_id=" + encodeURIComponent(v)) : "/crawl-logs";
+}
+async function clearLogs(){
+  const v = document.getElementById("siteSel").value;
+  if(!confirm("Clear logs " + (v ? "for this site" : "for ALL sites") + "?")) return;
+  const body = v ? {site_id: v} : {all: true};
+  const res = await fetch("/api/crawl/logs/clear",{method:"POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body)});
+  const out = await res.json();
+  if(out.ok){
+    document.getElementById("logBox").innerHTML = "";
+    lastId = 0;
+  } else {
+    alert(out.message || "Failed");
+  }
+}
+</script>
+{% endblock %}

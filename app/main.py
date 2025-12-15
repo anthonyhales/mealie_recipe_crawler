@@ -124,7 +124,23 @@ def init_db():
         )
     """)
 
-    conn.commit()
+    
+# Crawl logs (stored in SQL, used by Crawl Logs page)
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS crawl_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        site_id INTEGER,
+        level TEXT NOT NULL,
+        message TEXT NOT NULL,
+        url TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(site_id) REFERENCES sites(id)
+    )
+""")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_crawl_logs_site_id ON crawl_logs(site_id)")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_crawl_logs_id ON crawl_logs(id)")
+
+conn.commit()
     conn.close()
 
 def get_setting(key: str, default=None):
@@ -253,6 +269,24 @@ def ensure_defaults_and_migrate():
 init_db()
 ensure_admin_user()
 ensure_defaults_and_migrate()
+
+
+# ----------------------------
+# Crawl logging (SQL-backed)
+# ----------------------------
+def log_crawl(level: str, message: str, url: str | None = None, site_id: int | None = None):
+    """Append a crawl log row to SQLite. Must never crash the app."""
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO crawl_logs (site_id, level, message, url, created_at) VALUES (?,?,?,?,?)",
+            (site_id, str(level).upper(), str(message), url, datetime.datetime.utcnow().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 # ----------------------------
 # Auth dependencies
@@ -437,6 +471,10 @@ async def crawl_run():
         "site_name": site["name"],
     }
     set_progress("crawl", prog)
+    try:
+        log_crawl("INFO", "Crawl started", url=start_url, site_id=site.get("id"))
+    except Exception:
+        pass
 
     visited = set()
     queued = set()
@@ -814,6 +852,36 @@ def users_page(request: Request, user=Depends(require_admin)):
     conn.close()
     return templates.TemplateResponse("users.html", {"request": request, "user": dict(user), "users": rows, "github_repo": GITHUB_REPO})
 
+
+@app.get("/crawl-logs", response_class=HTMLResponse)
+def crawl_logs_page(request: Request, user=Depends(current_user), site_id: int | None = Query(None)):
+    active_site = get_active_site()
+    sites = list_sites()
+    sid = site_id or (active_site["id"] if active_site else None)
+
+    conn = db()
+    cur = conn.cursor()
+    if sid:
+        cur.execute("SELECT id, level, message, url, created_at FROM crawl_logs WHERE site_id=? ORDER BY id DESC LIMIT 200", (sid,))
+    else:
+        cur.execute("SELECT id, level, message, url, created_at FROM crawl_logs ORDER BY id DESC LIMIT 200")
+    logs = [dict(r) for r in cur.fetchall()][::-1]  # oldest first
+    conn.close()
+
+    return templates.TemplateResponse(
+        "crawl_logs.html",
+        {
+            "request": request,
+            "user": dict(user),
+            "sites": sites,
+            "active_site": active_site,
+            "site_id": sid,
+            "initial_logs": logs,
+            "github_repo": GITHUB_REPO,
+        },
+    )
+
+
 # ----------------------------
 # API: version (for UI footer)
 # ----------------------------
@@ -956,15 +1024,76 @@ def api_sites_delete(payload: dict = Body(...), user=Depends(current_user)):
     conn.close()
     return {"ok": True}
 
+
 @app.post("/api/sites/prescan")
 async def api_sites_prescan(payload: dict = Body(...), user=Depends(current_user)):
-    start_url = (payload.get("start_url") or "").strip()
+    # Accept multiple field names from UI and normalize scheme.
+    start_url = (payload.get("start_url") or payload.get("crawl_start_url") or payload.get("url") or "").strip()
+    if start_url and not start_url.startswith("http://") and not start_url.startswith("https://"):
+        start_url = "https://" + start_url
     if not start_url:
         return JSONResponse({"ok": False, "message": "Missing start URL"}, status_code=400)
+
     res = await prescan_run(start_url)
     if not res.get("ok"):
         return JSONResponse({"ok": False, "message": res.get("message", "Scan failed")}, status_code=400)
     return res
+
+
+
+# ----------------------------
+# API: crawl logs (live)
+# ----------------------------
+@app.get("/api/crawl/logs")
+def api_crawl_logs(
+    user=Depends(current_user),
+    site_id: int | None = Query(None),
+    after_id: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    conn = db()
+    cur = conn.cursor()
+    if site_id:
+        cur.execute(
+            """SELECT id, site_id, level, message, url, created_at
+               FROM crawl_logs
+               WHERE site_id=? AND id>?
+               ORDER BY id ASC
+               LIMIT ?""",
+            (site_id, after_id, limit),
+        )
+    else:
+        cur.execute(
+            """SELECT id, site_id, level, message, url, created_at
+               FROM crawl_logs
+               WHERE id>?
+               ORDER BY id ASC
+               LIMIT ?""",
+            (after_id, limit),
+        )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return {"ok": True, "logs": rows}
+
+@app.post("/api/crawl/logs/clear")
+def api_crawl_logs_clear(payload: dict = Body(...), user=Depends(current_user)):
+    site_id = payload.get("site_id")
+    all_logs = bool(payload.get("all", False))
+    if all_logs and user["role"] != "admin":
+        return JSONResponse({"ok": False, "message": "Admin required to clear all logs"}, status_code=403)
+
+    conn = db()
+    cur = conn.cursor()
+    if all_logs:
+        cur.execute("DELETE FROM crawl_logs")
+    elif site_id:
+        cur.execute("DELETE FROM crawl_logs WHERE site_id=?", (int(site_id),))
+    else:
+        conn.close()
+        return JSONResponse({"ok": False, "message": "Provide site_id or all=true"}, status_code=400)
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 # ----------------------------
 # API: crawl/upload control
@@ -980,6 +1109,12 @@ async def api_crawl_start(user=Depends(current_user)):
 @app.post("/api/crawl/stop")
 def api_crawl_stop(user=Depends(current_user)):
     crawl_cancel.set()
+    try:
+        site = get_active_site()
+        if site:
+            log_crawl("WARN", "Crawl cancelled by user", site_id=site["id"])
+    except Exception:
+        pass
     return {"ok": True}
 
 @app.post("/api/upload/start")
