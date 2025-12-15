@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import bcrypt
 from bs4 import BeautifulSoup
 
+
 from fastapi import (
     FastAPI, Request, Form, Depends, Body, HTTPException, Query
 )
@@ -16,6 +17,13 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+
+CRAWL_STATE = {
+    "running": False,
+    "pages": 0,
+    "recipes": 0,
+    "started_at": None,
+}
 
 # -------------------------------------------------
 # Paths / Environment
@@ -484,58 +492,33 @@ def api_sites_prescan(payload: dict = Body(...), user=Depends(current_user)):
 # -------------------------------------------------
 @app.post("/api/crawl/start")
 def crawl_start(user=Depends(current_user)):
-    conn = db()
-    cur = conn.cursor()
+    if CRAWL_STATE["running"]:
+        return {"ok": True, "message": "Crawl already running"}
 
-    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
-    row = cur.fetchone()
-    if not row or not row["value"]:
-        conn.close()
-        log("ERROR", "Crawl refused: no active site selected")
-        raise HTTPException(status_code=400, detail="No active site selected")
+    CRAWL_STATE["running"] = True
+    CRAWL_STATE["pages"] = 0
+    CRAWL_STATE["recipes"] = 0
+    CRAWL_STATE["started_at"] = datetime.datetime.utcnow().isoformat()
 
-    try:
-        site_id = int(row["value"])
-    except ValueError:
-        conn.close()
-        log("ERROR", f"Crawl refused: active_site_id is invalid ({row['value']})")
-        raise HTTPException(status_code=400, detail="Active site id is invalid")
-
-    cur.execute("SELECT * FROM sites WHERE id=?", (site_id,))
-    site = cur.fetchone()
-    conn.close()
-
-    if not site:
-        log("ERROR", f"Crawl refused: active site not found (id={site_id})", site_id=site_id)
-        raise HTTPException(status_code=400, detail="Active site not found")
-
-    log("INFO", f"Crawl started for '{site['name']}'", url=site["start_url"], site_id=site_id)
-    return {"ok": True, "site_id": site_id, "start_url": site["start_url"]}
-
+    log("INFO", "Crawl started")
+    return {"ok": True}
 
 @app.post("/api/crawl/stop")
 def crawl_stop(user=Depends(current_user)):
+    if not CRAWL_STATE["running"]:
+        return {"ok": True, "message": "Crawl not running"}
+
+    CRAWL_STATE["running"] = False
     log("INFO", "Crawl stopped")
     return {"ok": True}
 
-
 @app.get("/api/progress")
 def api_progress(user=Depends(current_user)):
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
-    row = cur.fetchone()
-    active_site_id = row["value"] if row else None
-
-    conn.close()
-
     return {
         "crawl": {
-            "status": "running" if active_site_id else "idle",
-            "pages": 0,
-            "recipes": 0,
-            "site_id": active_site_id,
+            "status": "running" if CRAWL_STATE["running"] else "idle",
+            "pages": CRAWL_STATE["pages"],
+            "recipes": CRAWL_STATE["recipes"],
         },
         "upload": {
             "status": "idle",
@@ -543,6 +526,26 @@ def api_progress(user=Depends(current_user)):
             "total": 0,
         }
     }
+    
+@app.get("/api/crawl/logs")
+def api_crawl_logs(
+    after_id: int = Query(0),
+    user=Depends(current_user)
+):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT * FROM crawl_logs
+        WHERE id > ?
+        ORDER BY id ASC
+        """,
+        (after_id,)
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return {"ok": True, "logs": rows}
+
 
 
 # -------------------------------------------------
