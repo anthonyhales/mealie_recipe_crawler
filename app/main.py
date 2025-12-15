@@ -364,10 +364,11 @@ def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
             method_selector,
             max_concurrency,
             request_delay,
+            user_agent,
             created_at
         ) VALUES (
             (SELECT id FROM sites ORDER BY id ASC LIMIT 1),
-            ?,?,?,?,?,?,?,?
+            ?,?,?,?,?,?,?,?,?
         )
     """, (
         payload.get("name", "Default Site"),
@@ -375,8 +376,9 @@ def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
         payload.get("recipe_pattern", ""),
         payload.get("ingredients_selector", ""),
         payload.get("method_selector", ""),
-        int(payload.get("max_concurrency", 5)),     # ✅ default
-        float(payload.get("request_delay", 0.5)),  # ✅ default
+        int(payload.get("max_concurrency", 5)),
+        float(payload.get("request_delay", 0.5)),
+        payload.get("user_agent", "MealieRecipeCrawler/1.0"),
         datetime.datetime.utcnow().isoformat(),
     ))
 
