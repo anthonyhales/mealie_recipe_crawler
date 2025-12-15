@@ -425,6 +425,17 @@ def upload_start(user=Depends(current_user)):
 def upload_status(user=Depends(current_user)):
     return {"status": "idle"}
 
+# -----------------------------
+# API – Meta / Info
+# -----------------------------
+@app.get("/api/meta")
+def api_meta():
+    return {
+        "name": "Mealie Recipe Crawler",
+        "version": os.getenv("APP_VERSION", "dev"),
+    }
+
+
 # -------------------------------------------------
 # API – Settings
 # -------------------------------------------------
