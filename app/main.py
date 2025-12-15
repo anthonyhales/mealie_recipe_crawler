@@ -513,9 +513,27 @@ def crawl_stop(user=Depends(current_user)):
 
 @app.get("/api/progress")
 def api_progress(user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
+    row = cur.fetchone()
+    active_site_id = row["value"] if row else None
+
+    conn.close()
+
     return {
-        "crawl": {"status": "idle", "pages": 0, "recipes": 0},
-        "upload": {"status": "idle", "done": 0, "total": 0},
+        "crawl": {
+            "status": "running" if active_site_id else "idle",
+            "pages": 0,
+            "recipes": 0,
+            "site_id": active_site_id,
+        },
+        "upload": {
+            "status": "idle",
+            "done": 0,
+            "total": 0,
+        }
     }
 
 
