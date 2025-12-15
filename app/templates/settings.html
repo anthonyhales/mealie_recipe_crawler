@@ -164,11 +164,19 @@ async function refreshSites(){
 
 async function selectSite(){
   const siteId = document.getElementById("siteSelect").value;
-  const res = await fetch("/api/sites/set-active",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({site_id: siteId})});
+  if(!siteId) return;
+
+  const res = await fetch("/api/sites/set-active", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({site_id: siteId})
+  });
+
   const out = await res.json();
   if(out.ok){ location.reload(); }
-  else { showMsg("siteMsg", false, out.message||"Failed"); }
+  else { showMsg("siteMsg", false, out.detail || out.message || "Failed"); }
 }
+
 
 function newSite(){
   // Clear form for new site
