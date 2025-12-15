@@ -219,15 +219,27 @@ def logout(request: Request):
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request, user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS c FROM recipes")
+    total_recipes = cur.fetchone()["c"]
+
+    cur.execute("SELECT COUNT(*) AS c FROM recipes WHERE uploaded = 1")
+    uploaded_recipes = cur.fetchone()["c"]
+
+    conn.close()
+
     crawl = {
         "status": "idle",
         "pages": 0,
-        "recipes_found": 0,
+        "recipes_found": total_recipes,
     }
+
     upload = {
         "status": "idle",
-        "done": 0,
-        "total": 0,
+        "done": uploaded_recipes,
+        "total": total_recipes,
     }
 
     return templates.TemplateResponse(
@@ -237,8 +249,11 @@ def dashboard(request: Request, user=Depends(current_user)):
             "user": user,
             "crawl": crawl,
             "upload": upload,
+            "total_recipes": total_recipes,
+            "uploaded_recipes": uploaded_recipes,
         }
     )
+
 
 
 @app.get("/crawl-logs", response_class=HTMLResponse)
