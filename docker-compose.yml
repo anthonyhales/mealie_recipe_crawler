@@ -2,12 +2,15 @@ version: "3.9"
 
 services:
   app:
-    build:
+    build: .
     ports:
       - "8222:8222"
     environment:
-      SESSION_SECRET: ;DTIIv|k.lA,2vuRjCqugxsPXB~mz}
+      SESSION_SECRET: CHANGE_ME_TO_A_LONG_RANDOM_SECRET
+      # Optional:
+      # ADMIN_USER: admin
+      # ADMIN_PASS: admin123
+      # GITHUB_REPO: youruser/mealie-recipe-crawler
     volumes:
       - ./data:/app/data
-    networks:
-      - mealie_crawler_net
+    restart: unless-stopped
