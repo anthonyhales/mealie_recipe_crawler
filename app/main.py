@@ -405,6 +405,56 @@ def api_sites_prescan(payload: dict = Body(...), user=Depends(current_user)):
         "ingredients_selector": ".ingredients li",
         "method_selector": ".method li",
     }
+    
+@app.get("/api/sites/list")
+def api_sites_list(user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, start_url FROM sites ORDER BY id ASC")
+    sites = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return {"ok": True, "sites": sites}
+    
+@app.post("/api/sites/set-active")
+def api_sites_set_active(payload: dict = Body(...), user=Depends(current_user)):
+    site_id = payload.get("site_id")
+    if not site_id:
+        raise HTTPException(status_code=400, detail="site_id required")
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_site_id', ?)",
+        (str(site_id),)
+    )
+    conn.commit()
+    conn.close()
+
+    log("INFO", f"Active site set to {site_id}")
+    return {"ok": True}
+    
+    @app.get("/api/sites/load")
+def api_sites_load(user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
+    row = cur.fetchone()
+    active_id = int(row["value"]) if row else None
+
+    site = None
+    if active_id:
+        cur.execute("SELECT * FROM sites WHERE id=?", (active_id,))
+        site = cur.fetchone()
+
+    conn.close()
+
+    return {
+        "ok": True,
+        "active_site_id": active_id,
+        "site": dict(site) if site else None
+    }
+
 
 # -------------------------------------------------
 # API – Crawl (stubbed)
