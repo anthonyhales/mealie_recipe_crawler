@@ -269,6 +269,46 @@ def api_logs(after_id: int = 0, user=Depends(current_user)):
     conn.close()
     return {"logs": rows}
 
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request, user=Depends(current_user)):
+    settings = {
+        "mealie_api_base": "",
+        "mealie_api_key": "",
+        "mealie_rate_limit": "2.0",
+    }
+
+    return templates.TemplateResponse(
+        "settings.html",
+        {
+            "request": request,
+            "user": user,
+            "settings": settings,
+        }
+    )
+    
+@app.get("/users", response_class=HTMLResponse)
+def users_page(request: Request, user=Depends(current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, username, role, created_at FROM users ORDER BY id ASC"
+    )
+    users = cur.fetchall()
+    conn.close()
+
+    return templates.TemplateResponse(
+        "users.html",
+        {
+            "request": request,
+            "user": user,
+            "users": users,
+        }
+    )
+
+
 
 # -----------------------------
 # Pre-scan
