@@ -364,11 +364,12 @@ def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
             method_selector,
             max_concurrency,
             request_delay,
+            max_pages,
             user_agent,
             created_at
         ) VALUES (
             (SELECT id FROM sites ORDER BY id ASC LIMIT 1),
-            ?,?,?,?,?,?,?,?,?
+            ?,?,?,?,?,?,?,?,?,?
         )
     """, (
         payload.get("name", "Default Site"),
@@ -378,6 +379,7 @@ def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
         payload.get("method_selector", ""),
         int(payload.get("max_concurrency", 5)),
         float(payload.get("request_delay", 0.5)),
+        int(payload.get("max_pages", 0)),  # 0 = unlimited
         payload.get("user_agent", "MealieRecipeCrawler/1.0"),
         datetime.datetime.utcnow().isoformat(),
     ))
@@ -387,7 +389,6 @@ def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
 
     log("INFO", "Site saved", url=payload.get("start_url"))
     return {"ok": True}
-
 
 
 @app.post("/api/sites/prescan")
