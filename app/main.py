@@ -219,9 +219,25 @@ def logout(request: Request):
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request, user=Depends(current_user)):
+    crawl = {
+        "status": "idle",
+        "pages": 0,
+        "recipes_found": 0,
+    }
+    upload = {
+        "status": "idle",
+        "done": 0,
+        "total": 0,
+    }
+
     return templates.TemplateResponse(
         "dashboard.html",
-        {"request": request, "user": user}
+        {
+            "request": request,
+            "user": user,
+            "crawl": crawl,
+            "upload": upload,
+        }
     )
 
 
