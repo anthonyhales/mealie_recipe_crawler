@@ -2,18 +2,16 @@ import os
 import sqlite3
 import secrets
 import datetime
-from typing import Optional
 from urllib.parse import urlparse
 
 import bcrypt
-import requests
 from bs4 import BeautifulSoup
 
 from fastapi import (
     FastAPI, Request, Form, Depends, Body, HTTPException, Query
 )
 from fastapi.responses import (
-    HTMLResponse, RedirectResponse, JSONResponse
+    HTMLResponse, RedirectResponse
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -62,7 +60,6 @@ def db():
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
 
 
@@ -83,12 +80,17 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        start_url TEXT,
-        recipe_pattern TEXT,
-        ingredients_selector TEXT,
-        method_selector TEXT,
-        created_at TEXT
+        name TEXT NOT NULL,
+        start_url TEXT NOT NULL,
+        recipe_pattern TEXT NOT NULL,
+        ingredients_selector TEXT NOT NULL,
+        method_selector TEXT NOT NULL,
+        max_concurrency INTEGER NOT NULL DEFAULT 5,
+        request_delay REAL NOT NULL DEFAULT 0.5,
+        max_pages INTEGER NOT NULL DEFAULT 0,
+        max_recipes INTEGER NOT NULL DEFAULT 0,
+        user_agent TEXT NOT NULL,
+        created_at TEXT NOT NULL
     )
     """)
 
@@ -177,6 +179,28 @@ def log(level, message, url=None, site_id=None):
 
 
 # -------------------------------------------------
+# Helpers
+# -------------------------------------------------
+def get_active_site():
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return None
+    cur.execute("SELECT * FROM sites WHERE id=?", (int(row["value"]),))
+    site = cur.fetchone()
+    conn.close()
+    return site
+
+
+def validate_selectors(html, ingredients_sel, method_sel):
+    soup = BeautifulSoup(html, "lxml")
+    return bool(soup.select(ingredients_sel)) and bool(soup.select(method_sel))
+
+
+# -------------------------------------------------
 # Pages
 # -------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
@@ -225,37 +249,20 @@ def dashboard(request: Request, user=Depends(current_user)):
         {
             "request": request,
             "user": user,
-            "crawl": {"status": "idle", "recipes_found": total},
-            "upload": {"status": "idle", "done": uploaded},
             "total_recipes": total,
             "uploaded_recipes": uploaded,
         },
     )
 
-# -----------------------------
-# API – Crawl / Progress
-# -----------------------------
-@app.get("/api/progress")
-def api_progress(user=Depends(current_user)):
-    return {
-        "crawl": {
-            "status": "idle",
-            "pages": 0,
-            "recipes": 0,
-        },
-        "upload": {
-            "status": "idle",
-            "done": 0,
-            "total": 0,
-        }
-    }
-    
+
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT key, value FROM settings")
+    cur.execute("SELECT key,value FROM settings")
     settings = {r["key"]: r["value"] for r in cur.fetchall()}
+    cur.execute("SELECT * FROM sites ORDER BY id ASC")
+    sites = cur.fetchall()
     conn.close()
 
     return templates.TemplateResponse(
@@ -264,21 +271,8 @@ def settings_page(request: Request, user=Depends(current_user)):
             "request": request,
             "user": user,
             "settings": settings,
-        }
-    )
-
-
-@app.get("/users", response_class=HTMLResponse)
-def users_page(request: Request, user=Depends(current_user)):
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403)
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT id, username, role, created_at FROM users")
-    users = cur.fetchall()
-    conn.close()
-    return templates.TemplateResponse(
-        "users.html", {"request": request, "user": user, "users": users}
+            "sites": sites,
+        },
     )
 
 
@@ -293,16 +287,11 @@ def recipes_page(
 
     conn = db()
     cur = conn.cursor()
-
     cur.execute("SELECT COUNT(*) c FROM recipes")
     total = cur.fetchone()["c"]
 
     cur.execute(
-        """
-        SELECT * FROM recipes
-        ORDER BY id DESC
-        LIMIT ? OFFSET ?
-        """,
+        "SELECT * FROM recipes ORDER BY id DESC LIMIT ? OFFSET ?",
         (page_size, offset),
     )
     recipes = cur.fetchall()
@@ -317,24 +306,22 @@ def recipes_page(
             "user": user,
             "recipes": recipes,
             "page": page,
-            "page_size": page_size,
-            "total": total,
             "total_pages": total_pages,
-        }
+        },
     )
-
 
 
 @app.get("/crawl-logs", response_class=HTMLResponse)
 def crawl_logs_page(request: Request, user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM crawl_logs ORDER BY id DESC LIMIT 200")
+    cur.execute("SELECT * FROM crawl_logs ORDER BY id DESC LIMIT 300")
     logs = cur.fetchall()[::-1]
     conn.close()
     return templates.TemplateResponse(
         "crawl_logs.html", {"request": request, "user": user, "logs": logs}
     )
+
 
 # -------------------------------------------------
 # API – Sites
@@ -343,57 +330,76 @@ def crawl_logs_page(request: Request, user=Depends(current_user)):
 def api_sites_load(user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM sites ORDER BY id ASC LIMIT 1")
-    site = cur.fetchone()
+    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
+    row = cur.fetchone()
+    active_site_id = int(row["value"]) if row else None
+    cur.execute("SELECT * FROM sites ORDER BY id ASC")
+    sites = [dict(r) for r in cur.fetchall()]
     conn.close()
-    return {"ok": True, "site": dict(site) if site else None}
+    return {"ok": True, "sites": sites, "active_site_id": active_site_id}
 
 
 @app.post("/api/sites/save")
 def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-
     cur.execute("""
-        INSERT OR REPLACE INTO sites (
-            id,
-            name,
-            start_url,
-            recipe_pattern,
-            ingredients_selector,
-            method_selector,
-
-            max_concurrency,
-            request_delay,
-            max_pages,
-            max_recipes,
-            user_agent,
-
-            created_at
-        ) VALUES (
-            (SELECT id FROM sites ORDER BY id ASC LIMIT 1),
-            ?,?,?,?,?,?,?,?,?,?,?
-        )
+        INSERT INTO sites (
+            name, start_url, recipe_pattern,
+            ingredients_selector, method_selector,
+            max_concurrency, request_delay,
+            max_pages, max_recipes, user_agent, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
     """, (
-        payload.get("name", "Default Site"),
-        payload.get("start_url", ""),
-        payload.get("recipe_pattern", ""),
-        payload.get("ingredients_selector", ""),
-        payload.get("method_selector", ""),
-
-        int(payload.get("max_concurrency", 5)),      # polite parallelism
-        float(payload.get("request_delay", 0.5)),   # rate limiting
-        int(payload.get("max_pages", 0)),            # 0 = unlimited
-        int(payload.get("max_recipes", 0)),          # 0 = unlimited
+        payload["name"],
+        payload["start_url"],
+        payload["recipe_pattern"],
+        payload["ingredients_selector"],
+        payload["method_selector"],
+        int(payload.get("max_concurrency", 5)),
+        float(payload.get("request_delay", 0.5)),
+        int(payload.get("max_pages", 0)),
+        int(payload.get("max_recipes", 0)),
         payload.get("user_agent", "MealieRecipeCrawler/1.0"),
-
         datetime.datetime.utcnow().isoformat(),
     ))
-
     conn.commit()
     conn.close()
+    return {"ok": True}
 
-    log("INFO", "Site saved", url=payload.get("start_url"))
+
+@app.post("/api/sites/delete")
+def api_sites_delete(payload: dict = Body(...), user=Depends(current_user)):
+    site_id = payload.get("site_id")
+    if not site_id:
+        raise HTTPException(400, "site_id required")
+
+    active = get_active_site()
+    if active and active["id"] == site_id:
+        raise HTTPException(400, "Cannot delete active site")
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM sites WHERE id=?", (site_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/sites/set-active")
+def api_sites_set_active(payload: dict = Body(...), user=Depends(current_user)):
+    site_id = payload.get("site_id")
+    if not site_id:
+        raise HTTPException(400, "site_id required")
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO settings (key,value) VALUES ('active_site_id',?)",
+        (str(site_id),),
+    )
+    conn.commit()
+    conn.close()
     return {"ok": True}
 
 
@@ -405,63 +411,17 @@ def api_sites_prescan(payload: dict = Body(...), user=Depends(current_user)):
         "ingredients_selector": ".ingredients li",
         "method_selector": ".method li",
     }
-    
-@app.get("/api/sites/list")
-def api_sites_list(user=Depends(current_user)):
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT id, name, start_url FROM sites ORDER BY id ASC")
-    sites = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return {"ok": True, "sites": sites}
-    
-@app.post("/api/sites/set-active")
-def api_sites_set_active(payload: dict = Body(...), user=Depends(current_user)):
-    site_id = payload.get("site_id")
-    if not site_id:
-        raise HTTPException(status_code=400, detail="site_id required")
-
-    conn = db()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_site_id', ?)",
-        (str(site_id),)
-    )
-    conn.commit()
-    conn.close()
-
-    log("INFO", f"Active site set to {site_id}")
-    return {"ok": True}
-    
-@app.get("/api/sites/load")
-def api_sites_load(user=Depends(current_user)):
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
-    row = cur.fetchone()
-    active_id = int(row["value"]) if row else None
-
-    site = None
-    if active_id:
-        cur.execute("SELECT * FROM sites WHERE id=?", (active_id,))
-        site = cur.fetchone()
-
-    conn.close()
-
-    return {
-        "ok": True,
-        "active_site_id": active_id,
-        "site": dict(site) if site else None
-    }
 
 
 # -------------------------------------------------
-# API – Crawl (stubbed)
+# API – Crawl (wired to active site)
 # -------------------------------------------------
 @app.post("/api/crawl/start")
 def crawl_start(user=Depends(current_user)):
-    log("INFO", "Crawl started")
+    site = get_active_site()
+    if not site:
+        raise HTTPException(400, "No active site selected")
+    log("INFO", f"Crawl started for {site['name']}", site_id=site["id"])
     return {"ok": True}
 
 
@@ -471,12 +431,16 @@ def crawl_stop(user=Depends(current_user)):
     return {"ok": True}
 
 
-@app.get("/api/crawl/status")
-def crawl_status(user=Depends(current_user)):
-    return {"status": "idle"}
+@app.get("/api/progress")
+def api_progress(user=Depends(current_user)):
+    return {
+        "crawl": {"status": "idle", "pages": 0, "recipes": 0},
+        "upload": {"status": "idle", "done": 0, "total": 0},
+    }
+
 
 # -------------------------------------------------
-# API – Upload (stubbed)
+# API – Upload (stub)
 # -------------------------------------------------
 @app.post("/api/upload/start")
 def upload_start(user=Depends(current_user)):
@@ -484,48 +448,12 @@ def upload_start(user=Depends(current_user)):
     return {"ok": True}
 
 
-@app.get("/api/upload/status")
-def upload_status(user=Depends(current_user)):
-    return {"status": "idle"}
-
-# -----------------------------
-# API – Meta / Info
-# -----------------------------
+# -------------------------------------------------
+# API – Meta
+# -------------------------------------------------
 @app.get("/api/meta")
 def api_meta():
     return {
         "name": "Mealie Recipe Crawler",
         "version": os.getenv("APP_VERSION", "dev"),
     }
-
-
-# -------------------------------------------------
-# API – Settings
-# -------------------------------------------------
-@app.get("/api/settings/load")
-def settings_load(user=Depends(current_user)):
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT key,value FROM settings")
-    data = {r["key"]: r["value"] for r in cur.fetchall()}
-    conn.close()
-    return {"ok": True, "settings": data}
-
-
-@app.post("/api/settings/save")
-def settings_save(payload: dict = Body(...), user=Depends(current_user)):
-    conn = db()
-    cur = conn.cursor()
-    for k, v in payload.items():
-        cur.execute(
-            "INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)", (k, v)
-        )
-    conn.commit()
-    conn.close()
-    log("INFO", "Settings saved")
-    return {"ok": True}
-
-
-@app.post("/api/settings/test")
-def settings_test(user=Depends(current_user)):
-    return {"ok": True, "message": "Connection OK"}
