@@ -1,0 +1,117 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <title>{{ title or "Mealie Recipe Crawler" }}</title>
+
+  <!-- SB Admin 2 (Bootstrap 4) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.1.4/css/sb-admin-2.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+
+<body id="page-top">
+<div id="wrapper">
+  <!-- Sidebar -->
+  <ul class="navbar-nav bg-gradient-primary sidebar sidebar-dark accordion" id="accordionSidebar">
+    <a class="sidebar-brand d-flex align-items-center justify-content-center" href="/dashboard">
+      <div class="sidebar-brand-icon rotate-n-15"><i class="fas fa-utensils"></i></div>
+      <div class="sidebar-brand-text mx-3">Mealie Crawler</div>
+    </a>
+
+    <hr class="sidebar-divider my-0">
+
+    <li class="nav-item {% if active=='dashboard' %}active{% endif %}">
+      <a class="nav-link" href="/dashboard"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a>
+    </li>
+
+    <li class="nav-item {% if active=='recipes' %}active{% endif %}">
+      <a class="nav-link" href="/recipes"><i class="fas fa-list"></i><span>Recipe History</span></a>
+    </li>
+
+    <li class="nav-item {% if active=='settings' %}active{% endif %}">
+      <a class="nav-link" href="/settings"><i class="fas fa-cog"></i><span>Settings</span></a>
+    </li>
+
+    {% if user and user.role == 'admin' %}
+    <li class="nav-item {% if active=='users' %}active{% endif %}">
+      <a class="nav-link" href="/users"><i class="fas fa-users"></i><span>User Management</span></a>
+    </li>
+    {% endif %}
+
+    <hr class="sidebar-divider d-none d-md-block">
+    <li class="nav-item">
+      <a class="nav-link" href="/logout"><i class="fas fa-sign-out-alt"></i><span>Logout</span></a>
+    </li>
+  </ul>
+
+  <!-- Content Wrapper -->
+  <div id="content-wrapper" class="d-flex flex-column">
+    <div id="content">
+      <!-- Topbar -->
+      <nav class="navbar navbar-expand navbar-light bg-white topbar mb-4 static-top shadow">
+        <button id="sidebarToggleTop" class="btn btn-link d-md-none rounded-circle mr-3">
+          <i class="fa fa-bars"></i>
+        </button>
+        <div class="ml-auto d-flex align-items-center">
+          <span class="text-gray-600 small mr-2">{{ user.username if user else "" }}</span>
+          <span class="badge badge-pill badge-light">{{ user.role if user else "" }}</span>
+        </div>
+      </nav>
+
+      <div class="container-fluid">
+        {% block content %}{% endblock %}
+      </div>
+    </div>
+
+    <footer class="sticky-footer bg-white">
+      <div class="container my-auto">
+        <div class="d-flex justify-content-between align-items-center my-auto small">
+          <div class="text-muted">Mealie Recipe Crawler</div>
+          <div class="text-muted">
+            <span id="appVersion">v?</span>
+            {% if github_repo %}
+              · <a target="_blank" href="https://github.com/{{ github_repo }}">GitHub</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/startbootstrap-sb-admin-2@4.1.4/js/sb-admin-2.min.js"></script>
+
+<script>
+(async function(){
+  try {
+    const meta = await fetch("/api/meta").then(r=>r.json());
+    const repo = meta.github_repo;
+    if(!repo){ document.getElementById("appVersion").innerText = "local"; return; }
+    const rel = await fetch("https://api.github.com/repos/" + repo + "/releases/latest").then(r=>r.json());
+    if(rel && rel.tag_name){
+      document.getElementById("appVersion").innerText = rel.tag_name;
+      return;
+    }
+    // fallback: short sha
+    const c = await fetch("https://api.github.com/repos/" + repo + "/commits/main").then(r=>r.json());
+    if(c && c.sha){
+      document.getElementById("appVersion").innerText = "commit " + c.sha.substring(0,7);
+      return;
+    }
+    document.getElementById("appVersion").innerText = "unknown";
+  } catch(e){
+    document.getElementById("appVersion").innerText = "unknown";
+  }
+})();
+</script>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,221 @@
+
+{% extends "base.html" %}
+{% set active = 'settings' %}
+{% block content %}
+<h1 class="h3 mb-4 text-gray-800">Settings</h1>
+
+<div class="row">
+  <div class="col-lg-6">
+    <!-- Mealie settings -->
+    <div class="card shadow mb-4">
+      <div class="card-header py-3"><h6 class="m-0 font-weight-bold text-primary">Mealie</h6></div>
+      <div class="card-body">
+        <form id="mealieForm">
+          <div class="form-group">
+            <label>Mealie base URL</label>
+            <input class="form-control" name="mealie_api_base" placeholder="http://mealie:9000" value="{{ settings.get('mealie_api_base','') }}">
+            <small class="form-text text-muted">Example: http://localhost:9000 (we will call /api/recipes/import)</small>
+          </div>
+          <div class="form-group">
+            <label>Mealie API key</label>
+            <input class="form-control" name="mealie_api_key" placeholder="Paste API key" value="{{ settings.get('mealie_api_key','') }}">
+          </div>
+          <div class="form-group">
+            <label>Upload rate limit (seconds)</label>
+            <input class="form-control" name="mealie_rate_limit" type="number" step="0.1" min="0.1" value="{{ settings.get('mealie_rate_limit','2.0') }}">
+          </div>
+
+          <div class="d-flex">
+            <button type="button" class="btn btn-success mr-2" onclick="saveMealie()">Save</button>
+            <button type="button" class="btn btn-outline-primary" onclick="testMealie()">Test connection</button>
+          </div>
+          <div class="mt-3" id="mealieMsg"></div>
+        </form>
+      </div>
+    </div>
+
+    {% if user.role == 'admin' %}
+    <div class="card shadow mb-4">
+      <div class="card-header py-3"><h6 class="m-0 font-weight-bold text-primary">Admin</h6></div>
+      <div class="card-body">
+        <p class="mb-0">User management is available under <a href="/users">User Management</a>.</p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-6">
+    <!-- Site profiles -->
+    <div class="card shadow mb-4">
+      <div class="card-header py-3 d-flex justify-content-between align-items-center">
+        <h6 class="m-0 font-weight-bold text-primary">Site profiles</h6>
+        <button class="btn btn-sm btn-outline-primary" onclick="newSite()">New</button>
+      </div>
+      <div class="card-body">
+        <div class="form-group">
+          <label>Active site</label>
+          <select class="form-control" id="siteSelect" onchange="selectSite()">
+            {% for s in sites %}
+              <option value="{{ s.id }}" {% if active_site and s.id==active_site.id %}selected{% endif %}>{{ s.name }}</option>
+            {% endfor %}
+          </select>
+          <small class="form-text text-muted">Crawl will use the active site profile.</small>
+        </div>
+
+        <form id="siteForm">
+          <input type="hidden" name="id" value="{{ active_site.id if active_site else '' }}">
+          <div class="form-group">
+            <label>Profile name</label>
+            <input class="form-control" name="name" value="{{ active_site.name if active_site else '' }}">
+          </div>
+          <div class="form-group">
+            <label>Start URL</label>
+            <input class="form-control" name="start_url" value="{{ active_site.start_url if active_site else '' }}">
+          </div>
+          <div class="form-group">
+            <label>Recipe URL pattern</label>
+            <input class="form-control" name="recipe_pattern" placeholder="/recipes/" value="{{ active_site.recipe_pattern if active_site else '' }}">
+          </div>
+          <div class="form-group">
+            <label>Ingredients selector (optional)</label>
+            <input class="form-control" name="ingredients_selector" placeholder=".ingredients li" value="{{ active_site.ingredients_selector if active_site else '' }}">
+          </div>
+          <div class="form-group">
+            <label>Method selector (optional)</label>
+            <input class="form-control" name="method_selector" placeholder=".method li" value="{{ active_site.method_selector if active_site else '' }}">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-md-6">
+              <label>Max concurrency</label>
+              <input class="form-control" name="max_concurrency" type="number" min="1" max="20" value="{{ active_site.max_concurrency if active_site else '4' }}">
+            </div>
+            <div class="form-group col-md-6">
+              <label>Request delay (seconds)</label>
+              <input class="form-control" name="request_delay" type="number" step="0.1" min="0.1" value="{{ active_site.request_delay if active_site else '0.8' }}">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-md-6">
+              <label>Max pages</label>
+              <input class="form-control" name="max_pages" type="number" min="1" value="{{ active_site.max_pages if active_site else '5000' }}">
+            </div>
+            <div class="form-group col-md-6">
+              <label>Max recipes</label>
+              <input class="form-control" name="max_recipes" type="number" min="1" value="{{ active_site.max_recipes if active_site else '20000' }}">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>User-Agent</label>
+            <textarea class="form-control" name="user_agent" rows="2">{{ active_site.user_agent if active_site else '' }}</textarea>
+          </div>
+
+          <div class="d-flex">
+            <button type="button" class="btn btn-info mr-2" onclick="prescan()">Pre-scan</button>
+            <button type="button" class="btn btn-success mr-2" onclick="saveSite()">Save</button>
+            <button type="button" class="btn btn-outline-danger" onclick="deleteSite()">Delete</button>
+          </div>
+
+          <div class="mt-3" id="siteMsg"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showMsg(id, ok, msg){
+  const el = document.getElementById(id);
+  el.className = ok ? "alert alert-success py-2" : "alert alert-danger py-2";
+  el.innerText = msg;
+  setTimeout(()=>{ el.className=""; el.innerText=""; }, 3500);
+}
+
+function formToObj(formId){
+  const f = document.getElementById(formId);
+  const data = {};
+  [...f.elements].forEach(el => { if(el.name) data[el.name]=el.value; });
+  return data;
+}
+
+async function saveMealie(){
+  const data = formToObj("mealieForm");
+  const res = await fetch("/api/settings/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
+  const out = await res.json();
+  showMsg("mealieMsg", out.ok, out.ok ? "Saved." : (out.message||"Failed"));
+}
+
+async function testMealie(){
+  const data = formToObj("mealieForm");
+  const res = await fetch("/api/settings/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
+  const out = await res.json();
+  showMsg("mealieMsg", out.ok, out.ok ? (out.message||"Success") : (out.message||"Failed"));
+}
+
+async function refreshSites(){
+  const out = await fetch("/api/sites").then(r=>r.json());
+  if(!out.ok) return;
+  // simplest: reload page after changes for now
+}
+
+async function selectSite(){
+  const siteId = document.getElementById("siteSelect").value;
+  const res = await fetch("/api/sites/set-active",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({site_id: siteId})});
+  const out = await res.json();
+  if(out.ok){ location.reload(); }
+  else { showMsg("siteMsg", false, out.message||"Failed"); }
+}
+
+function newSite(){
+  // Clear form for new site
+  document.querySelector("#siteForm [name='id']").value = "";
+  document.querySelector("#siteForm [name='name']").value = "New Site";
+  document.querySelector("#siteForm [name='start_url']").value = "";
+  document.querySelector("#siteForm [name='recipe_pattern']").value = "";
+  document.querySelector("#siteForm [name='ingredients_selector']").value = "";
+  document.querySelector("#siteForm [name='method_selector']").value = "";
+  document.querySelector("#siteForm [name='max_concurrency']").value = 4;
+  document.querySelector("#siteForm [name='request_delay']").value = 0.8;
+  document.querySelector("#siteForm [name='max_pages']").value = 5000;
+  document.querySelector("#siteForm [name='max_recipes']").value = 20000;
+  showMsg("siteMsg", true, "Fill in details and click Save.");
+}
+
+async function saveSite(){
+  const data = formToObj("siteForm");
+  const res = await fetch("/api/sites/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
+  const out = await res.json();
+  if(out.ok){ showMsg("siteMsg", true, "Saved. Reloading..."); setTimeout(()=>location.reload(), 700); }
+  else { showMsg("siteMsg", false, out.message||"Failed"); }
+}
+
+async function deleteSite(){
+  const id = document.querySelector("#siteForm [name='id']").value;
+  if(!id){ showMsg("siteMsg", false, "Select an existing site to delete."); return; }
+  if(!confirm("Delete this site profile?")) return;
+  const res = await fetch("/api/sites/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({site_id:id})});
+  const out = await res.json();
+  if(out.ok){ showMsg("siteMsg", true, "Deleted. Reloading..."); setTimeout(()=>location.reload(), 700); }
+  else { showMsg("siteMsg", false, out.message||"Failed"); }
+}
+
+async function prescan(){
+  const start_url = document.querySelector("#siteForm [name='start_url']").value.trim();
+  if(!start_url){ showMsg("siteMsg", false, "Enter Start URL first."); return; }
+  const res = await fetch("/api/sites/prescan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({start_url})});
+  const out = await res.json();
+  if(out.ok){
+    document.querySelector("#siteForm [name='recipe_pattern']").value = out.recipe_pattern || "";
+    document.querySelector("#siteForm [name='ingredients_selector']").value = out.ingredients_selector || "";
+    document.querySelector("#siteForm [name='method_selector']").value = out.method_selector || "";
+    showMsg("siteMsg", true, "Scan complete. Review suggestions then Save.");
+  } else {
+    showMsg("siteMsg", false, out.message || "Scan failed");
+  }
+}
+</script>
+{% endblock %}

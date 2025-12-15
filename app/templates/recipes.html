@@ -1,0 +1,101 @@
+
+{% extends "base.html" %}
+{% set active = 'recipes' %}
+{% block content %}
+<div class="d-sm-flex align-items-center justify-content-between mb-3">
+  <h1 class="h3 mb-0 text-gray-800">Recipe History</h1>
+  <div>
+    <a class="btn btn-sm btn-outline-primary" href="/api/recipes/download/txt">TXT</a>
+    <a class="btn btn-sm btn-outline-primary" href="/api/recipes/download/csv">CSV</a>
+    <a class="btn btn-sm btn-outline-primary" href="/api/recipes/download/excel">Excel</a>
+  </div>
+</div>
+
+<div class="card shadow mb-3">
+  <div class="card-body d-flex align-items-center justify-content-between flex-wrap">
+    <div class="small text-muted">
+      Total: <b>{{ total }}</b> · Page <b>{{ page }}</b> of <b>{{ total_pages }}</b>
+    </div>
+    <div class="d-flex align-items-center">
+      <label class="small text-muted mb-0 mr-2">Page size</label>
+      <select class="form-control form-control-sm" style="width:110px;" onchange="setSize(this.value)">
+        {% for s in [50,100,200] %}
+          <option value="{{s}}" {% if s==page_size %}selected{% endif %}>{{s}}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+</div>
+
+<div class="card shadow mb-4">
+  <div class="card-header py-3 d-flex justify-content-between align-items-center">
+    <h6 class="m-0 font-weight-bold text-primary">Recipes</h6>
+    <nav aria-label="pagination">
+      <ul class="pagination pagination-sm mb-0">
+        <li class="page-item {% if page<=1 %}disabled{% endif %}">
+          <a class="page-link" href="/recipes?page={{ page-1 }}&page_size={{ page_size }}">Prev</a>
+        </li>
+        {% for p in page_range %}
+          <li class="page-item {% if p==page %}active{% endif %}">
+            <a class="page-link" href="/recipes?page={{ p }}&page_size={{ page_size }}">{{ p }}</a>
+          </li>
+        {% endfor %}
+        <li class="page-item {% if page>=total_pages %}disabled{% endif %}">
+          <a class="page-link" href="/recipes?page={{ page+1 }}&page_size={{ page_size }}">Next</a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-bordered table-sm" width="100%" cellspacing="0">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>URL</th>
+            <th>Site</th>
+            <th>Title</th>
+            <th>Crawled</th>
+            <th>Uploaded</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in recipes %}
+          <tr>
+            <td>{{ r.id }}</td>
+            <td class="text-truncate" style="max-width:520px;"><a target="_blank" href="{{ r.url }}">{{ r.url }}</a></td>
+            <td>{{ r.website }}</td>
+            <td class="text-truncate" style="max-width:320px;">{{ r.title or "" }}</td>
+            <td>{{ r.crawled_at }}</td>
+            <td>{% if r.uploaded %}<span class="badge badge-success">Yes</span>{% else %}<span class="badge badge-secondary">No</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <nav aria-label="pagination-bottom">
+      <ul class="pagination pagination-sm mb-0 justify-content-end">
+        <li class="page-item {% if page<=1 %}disabled{% endif %}">
+          <a class="page-link" href="/recipes?page={{ page-1 }}&page_size={{ page_size }}">Prev</a>
+        </li>
+        {% for p in page_range %}
+          <li class="page-item {% if p==page %}active{% endif %}">
+            <a class="page-link" href="/recipes?page={{ p }}&page_size={{ page_size }}">{{ p }}</a>
+          </li>
+        {% endfor %}
+        <li class="page-item {% if page>=total_pages %}disabled{% endif %}">
+          <a class="page-link" href="/recipes?page={{ page+1 }}&page_size={{ page_size }}">Next</a>
+        </li>
+      </ul>
+    </nav>
+
+  </div>
+</div>
+
+<script>
+function setSize(sz){
+  window.location.href = "/recipes?page=1&page_size=" + encodeURIComponent(sz);
+}
+</script>
+{% endblock %}

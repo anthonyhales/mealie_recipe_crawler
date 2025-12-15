@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% set active = 'dashboard' %}
+{% block content %}
+<div class="d-sm-flex align-items-center justify-content-between mb-4">
+  <h1 class="h3 mb-0 text-gray-800">Dashboard</h1>
+  <div class="small text-muted">Active site: <b>{{ active_site.name if active_site else "None" }}</b></div>
+</div>
+
+<div class="row">
+  <div class="col-xl-4 col-md-6 mb-4">
+    <div class="card border-left-primary shadow h-100 py-2">
+      <div class="card-body">
+        <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">Total Recipes</div>
+        <div class="h5 mb-0 font-weight-bold text-gray-800" id="totalCount">{{ total_recipes }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-xl-4 col-md-6 mb-4">
+    <div class="card border-left-success shadow h-100 py-2">
+      <div class="card-body">
+        <div class="text-xs font-weight-bold text-success text-uppercase mb-1">Uploaded</div>
+        <div class="h5 mb-0 font-weight-bold text-gray-800" id="uploadedCount">{{ uploaded_recipes }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-xl-4 col-md-6 mb-4">
+    <div class="card border-left-warning shadow h-100 py-2">
+      <div class="card-body">
+        <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">Pending Upload</div>
+        <div class="h5 mb-0 font-weight-bold text-gray-800" id="pendingCount">0</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <!-- Crawl card -->
+  <div class="col-lg-6 mb-4">
+    <div class="card shadow">
+      <div class="card-header py-3">
+        <h6 class="m-0 font-weight-bold text-primary">Crawl</h6>
+      </div>
+      <div class="card-body">
+        <div class="small text-gray-600 mb-2">Status: <span id="crawlStatus">{{ crawl.status }}</span></div>
+        <div class="progress mb-2">
+          <div id="crawlBar" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+        </div>
+        <div class="d-flex justify-content-between small text-gray-600">
+          <div>Pages: <span id="crawlPages">{{ crawl.pages }}</span></div>
+          <div>Recipes found: <span id="crawlFound">{{ crawl.recipes_found }}</span></div>
+        </div>
+        <div class="mt-3">
+          <button class="btn btn-success btn-sm" onclick="startCrawl()">Start Crawl</button>
+          <button class="btn btn-danger btn-sm" onclick="stopCrawl()">Cancel Crawl</button>
+          <a class="btn btn-link btn-sm" href="/settings">Crawl settings</a>
+        </div>
+        <div class="mt-2 small text-gray-500 text-truncate" id="crawlLastUrl"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload card -->
+  <div class="col-lg-6 mb-4">
+    <div class="card shadow">
+      <div class="card-header py-3">
+        <h6 class="m-0 font-weight-bold text-success">Upload to Mealie</h6>
+      </div>
+      <div class="card-body">
+        <div class="small text-gray-600 mb-2">Status: <span id="uploadStatus">{{ upload.status }}</span></div>
+        <div class="progress mb-2">
+          <div id="uploadBar" class="progress-bar bg-success" role="progressbar" style="width: 0%;">0%</div>
+        </div>
+        <div class="d-flex justify-content-between small text-gray-600">
+          <div>Done: <span id="uploadDone">{{ upload.done }}</span> / <span id="uploadTotal">{{ upload.total }}</span></div>
+          <div></div>
+        </div>
+        <div class="mt-3">
+          <button class="btn btn-success btn-sm" onclick="startUpload()">Start Upload</button>
+          <button class="btn btn-danger btn-sm" onclick="stopUpload()">Cancel Upload</button>
+          <a class="btn btn-link btn-sm" href="/settings">Mealie settings</a>
+        </div>
+        <div class="mt-2 small text-gray-500 text-truncate" id="uploadLastUrl"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent recipes -->
+<div class="card shadow mb-4">
+  <div class="card-header py-3 d-flex align-items-center justify-content-between">
+    <h6 class="m-0 font-weight-bold text-primary">Recently Found Recipes</h6>
+    <a class="btn btn-sm btn-outline-primary" href="/recipes">View all</a>
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-bordered table-sm" width="100%" cellspacing="0">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>URL</th>
+            <th>Site</th>
+            <th>Crawled</th>
+            <th>Uploaded</th>
+          </tr>
+        </thead>
+        <tbody id="recentBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function post(url, body=null){
+  const res = await fetch(url, {method:"POST", headers: {"Content-Type":"application/json"}, body: body ? JSON.stringify(body) : null});
+  return res.json();
+}
+
+function pct(done,total){
+  if(!total || total<=0) return 0;
+  return Math.max(0, Math.min(100, Math.floor((done/total)*100)));
+}
+
+async function startCrawl(){ await post("/api/crawl/start"); }
+async function stopCrawl(){ await post("/api/crawl/stop"); }
+async function startUpload(){ await post("/api/upload/start"); }
+async function stopUpload(){ await post("/api/upload/stop"); }
+
+function escapeHtml(s){
+  return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+async function refresh(){
+  const res = await fetch("/api/progress");
+  const data = await res.json();
+
+  // counts
+  document.getElementById("totalCount").innerText = data.counts.total;
+  document.getElementById("uploadedCount").innerText = data.counts.uploaded;
+  document.getElementById("pendingCount").innerText = data.counts.pending;
+
+  // crawl
+  document.getElementById("crawlStatus").innerText = data.crawl.status || "idle";
+  document.getElementById("crawlPages").innerText = data.crawl.pages || 0;
+  document.getElementById("crawlFound").innerText = data.crawl.recipes_found || 0;
+  document.getElementById("crawlLastUrl").innerText = data.crawl.last_url || "";
+  // progress: for crawl we don't know total pages. Use a soft indicator based on activity.
+  const crawlPercent = data.crawl.status === "running" ? 60 : (data.crawl.status === "done" ? 100 : 0);
+  const cb = document.getElementById("crawlBar");
+  cb.style.width = crawlPercent + "%";
+  cb.innerText = crawlPercent + "%";
+
+  // upload
+  document.getElementById("uploadStatus").innerText = data.upload.status || "idle";
+  document.getElementById("uploadDone").innerText = data.upload.done || 0;
+  document.getElementById("uploadTotal").innerText = data.upload.total || 0;
+  document.getElementById("uploadLastUrl").innerText = data.upload.last_url || "";
+  const up = pct(data.upload.done || 0, data.upload.total || 0);
+  const ub = document.getElementById("uploadBar");
+  ub.style.width = up + "%";
+  ub.innerText = up + "%";
+
+  // recent
+  const tbody = document.getElementById("recentBody");
+  tbody.innerHTML = "";
+  (data.recent || []).forEach(r => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.id}</td>
+      <td class="text-truncate" style="max-width:520px;"><a target="_blank" href="${escapeHtml(r.url)}">${escapeHtml(r.url)}</a></td>
+      <td>${escapeHtml(r.website)}</td>
+      <td>${escapeHtml(r.crawled_at || "")}</td>
+      <td>${r.uploaded ? "Yes" : "No"}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+refresh();
+setInterval(refresh, 1500);
+</script>
+{% endblock %}
