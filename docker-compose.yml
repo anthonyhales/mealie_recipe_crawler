@@ -9,7 +9,7 @@ services:
     environment:
       # Change this to a long random string. Example:
       # python -c "import secrets; print(secrets.token_hex(32))"
-      - SESSION_SECRET=CHANGE_ME_TO_A_LONG_RANDOM_SECRET
+      - SESSION_SECRET=;DTIIv|k.lA,2vuRjCqugxsPXB~mz}
       # Optional: control initial admin password on first run (otherwise it will be generated and printed in logs)
       # - ADMIN_PASS=change-this-password
       # Optional: show version in footer (GitHub releases)
