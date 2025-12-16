@@ -2,12 +2,12 @@ import os
 import sqlite3
 import secrets
 import datetime
-from urllib.parse import urlparse
+from typing import Optional
+from urllib.parse import urljoin, urlparse
 
 import bcrypt
+import requests
 from bs4 import BeautifulSoup
-import threading
-import time
 
 from fastapi import (
     FastAPI, Request, Form, Depends, Body, HTTPException, Query
@@ -18,16 +18,6 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-
-CRAWL_STATE = {
-    "running": False,
-    "site_id": None,
-    "site_name": None,
-    "start_url": None,
-    "pages": 0,
-    "recipes": 0,
-    "started_at": None,
-}
 
 # -------------------------------------------------
 # Paths / Environment
@@ -72,6 +62,7 @@ def db():
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
 
 
@@ -92,17 +83,17 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        start_url TEXT NOT NULL,
-        recipe_pattern TEXT NOT NULL,
-        ingredients_selector TEXT NOT NULL,
-        method_selector TEXT NOT NULL,
-        max_concurrency INTEGER NOT NULL DEFAULT 5,
-        request_delay REAL NOT NULL DEFAULT 0.5,
-        max_pages INTEGER NOT NULL DEFAULT 0,
-        max_recipes INTEGER NOT NULL DEFAULT 0,
-        user_agent TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        name TEXT,
+        start_url TEXT,
+        recipe_pattern TEXT,
+        ingredients_selector TEXT,
+        method_selector TEXT,
+        max_concurrency INTEGER DEFAULT 4,
+        request_delay REAL DEFAULT 0.8,
+        max_pages INTEGER DEFAULT 0,
+        max_recipes INTEGER DEFAULT 0,
+        user_agent TEXT DEFAULT 'MealieRecipeCrawler/1.0',
+        created_at TEXT
     )
     """)
 
@@ -160,6 +151,35 @@ init_db()
 ensure_admin()
 
 # -------------------------------------------------
+# Helpers – Active site (single source of truth)
+# -------------------------------------------------
+def get_active_site():
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    cur.execute("SELECT * FROM sites WHERE id=?", (row["value"],))
+    site = cur.fetchone()
+    conn.close()
+    return site
+
+
+def set_active_site(site_id: int):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO settings (key,value) VALUES ('active_site_id',?)",
+        (str(site_id),)
+    )
+    conn.commit()
+    conn.close()
+
+
+# -------------------------------------------------
 # Auth
 # -------------------------------------------------
 def current_user(request: Request):
@@ -189,63 +209,6 @@ def log(level, message, url=None, site_id=None):
     conn.commit()
     conn.close()
 
-
-# -------------------------------------------------
-# Helpers
-# -------------------------------------------------
-def get_active_site(conn):
-    cur = conn.cursor()
-
-    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
-    row = cur.fetchone()
-    if not row:
-        return None
-
-    cur.execute("SELECT * FROM sites WHERE id=?", (row["value"],))
-    return cur.fetchone()
-
-
-
-def validate_selectors(html, ingredients_sel, method_sel):
-    soup = BeautifulSoup(html, "lxml")
-    return bool(soup.select(ingredients_sel)) and bool(soup.select(method_sel))
-    
-def crawl_worker(site):
-    CRAWL_STATE["running"] = True
-    CRAWL_STATE["site_id"] = site["id"]
-    CRAWL_STATE["site_name"] = site["name"]
-    CRAWL_STATE["start_url"] = site["start_url"]
-    CRAWL_STATE["pages"] = 0
-    CRAWL_STATE["recipes"] = 0
-    CRAWL_STATE["started_at"] = datetime.datetime.utcnow().isoformat()
-
-    log(
-        "INFO",
-        f"Crawl started for site '{site['name']}' {site['start_url']}",
-        site_id=site["id"],
-        url=site["start_url"],
-    )
-
-    # ---- PLACEHOLDER LOOP ----
-    # This is where your real crawler logic will go
-    # For now, simulate work safely
-
-    try:
-        for i in range(1, 6):
-            if not CRAWL_STATE["running"]:
-                log("INFO", "Crawl stopped by user", site_id=site["id"])
-                return
-
-            time.sleep(site["request_delay"])
-            CRAWL_STATE["pages"] += 1
-
-            # fake recipe found every 2 pages
-            if i % 2 == 0:
-                CRAWL_STATE["recipes"] += 1
-
-        log("INFO", "Crawl finished", site_id=site["id"])
-    finally:
-        CRAWL_STATE["running"] = False
 
 # -------------------------------------------------
 # Pages
@@ -286,23 +249,16 @@ def dashboard(request: Request, user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
 
-    # Active site
-    cur.execute(
-        """
-        SELECT s.*
-        FROM sites s
-        JOIN settings st ON st.value = CAST(s.id AS TEXT)
-        WHERE st.key = 'active_site_id'
-        """
-    )
-    site = cur.fetchone()
-
-    # Recipe counts
     cur.execute("SELECT COUNT(*) c FROM recipes")
     total = cur.fetchone()["c"]
 
-    cur.execute("SELECT COUNT(*) c FROM recipes WHERE uploaded = 1")
+    cur.execute("SELECT COUNT(*) c FROM recipes WHERE uploaded=1")
     uploaded = cur.fetchone()["c"]
+
+    cur.execute("SELECT id, name FROM sites ORDER BY name")
+    sites = [dict(r) for r in cur.fetchall()]
+
+    active_site = get_active_site()
 
     conn.close()
 
@@ -311,20 +267,10 @@ def dashboard(request: Request, user=Depends(current_user)):
         {
             "request": request,
             "user": user,
-            "site": site,
-
-            # REQUIRED by dashboard.html
-            "crawl": {
-                "status": "idle",
-                "pages": 0,
-                "recipes": total,
-            },
-            "upload": {
-                "status": "idle",
-                "done": uploaded,
-                "total": total,
-            },
-
+            "sites": sites,
+            "active_site": dict(active_site) if active_site else None,
+            "crawl": {"status": "idle"},
+            "upload": {"status": "idle"},
             "total_recipes": total,
             "uploaded_recipes": uploaded,
         },
@@ -336,23 +282,13 @@ def settings_page(request: Request, user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
 
-    cur.execute("SELECT key, value FROM settings")
+    cur.execute("SELECT key,value FROM settings")
     settings = {r["key"]: r["value"] for r in cur.fetchall()}
 
-    cur.execute("SELECT * FROM sites ORDER BY id ASC")
+    cur.execute("SELECT * FROM sites ORDER BY name")
     sites = cur.fetchall()
 
-    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
-    row = cur.fetchone()
-
-    active_site = None
-    if row and row["value"]:
-        try:
-            active_id = int(row["value"])
-            cur.execute("SELECT * FROM sites WHERE id=?", (active_id,))
-            active_site = cur.fetchone()
-        except ValueError:
-            active_site = None
+    active_site = get_active_site()
 
     conn.close()
 
@@ -368,7 +304,6 @@ def settings_page(request: Request, user=Depends(current_user)):
     )
 
 
-
 @app.get("/recipes", response_class=HTMLResponse)
 def recipes_page(
     request: Request,
@@ -377,9 +312,9 @@ def recipes_page(
     page_size: int = Query(25, ge=10, le=200),
 ):
     offset = (page - 1) * page_size
-
     conn = db()
     cur = conn.cursor()
+
     cur.execute("SELECT COUNT(*) c FROM recipes")
     total = cur.fetchone()["c"]
 
@@ -399,8 +334,10 @@ def recipes_page(
             "user": user,
             "recipes": recipes,
             "page": page,
+            "page_size": page_size,
+            "total": total,
             "total_pages": total_pages,
-        },
+        }
     )
 
 
@@ -415,119 +352,76 @@ def crawl_logs_page(request: Request, user=Depends(current_user)):
         "crawl_logs.html", {"request": request, "user": user, "logs": logs}
     )
 
-
 # -------------------------------------------------
 # API – Sites
 # -------------------------------------------------
-@app.get("/api/sites/load")
-def api_sites_load(user=Depends(current_user)):
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
-    row = cur.fetchone()
-    active_id = int(row["value"]) if row else None
-
-    site = None
-    if active_id:
-        cur.execute("SELECT * FROM sites WHERE id=?", (active_id,))
-        site = cur.fetchone()
-
-    conn.close()
-
-    return {
-        "ok": True,
-        "active_site_id": active_id,
-        "site": dict(site) if site else None,
-    }
-
 @app.get("/api/sites/list")
 def api_sites_list(user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT id, name FROM sites ORDER BY id ASC")
+    cur.execute("SELECT id,name,start_url FROM sites ORDER BY name")
     sites = [dict(r) for r in cur.fetchall()]
     conn.close()
     return {"ok": True, "sites": sites}
+
+
+@app.post("/api/sites/set-active")
+def api_sites_set_active(payload: dict = Body(...), user=Depends(current_user)):
+    site_id = payload.get("site_id")
+    if not site_id:
+        raise HTTPException(status_code=400, detail="site_id required")
+    set_active_site(int(site_id))
+    site = get_active_site()
+    log(
+        "INFO",
+        f"Active site set: {site['name']} (id={site['id']}) {site['start_url']}",
+        site_id=site["id"],
+        url=site["start_url"],
+    )
+    return {"ok": True}
+
 
 @app.post("/api/sites/save")
 def api_sites_save(payload: dict = Body(...), user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO sites (
-            name, start_url, recipe_pattern,
-            ingredients_selector, method_selector,
-            max_concurrency, request_delay,
-            max_pages, max_recipes, user_agent, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-    """, (
-        payload["name"],
-        payload["start_url"],
-        payload["recipe_pattern"],
-        payload["ingredients_selector"],
-        payload["method_selector"],
-        int(payload.get("max_concurrency", 5)),
-        float(payload.get("request_delay", 0.5)),
+
+    site_id = payload.get("id")
+
+    fields = (
+        payload.get("name", "New Site"),
+        payload.get("start_url", ""),
+        payload.get("recipe_pattern", ""),
+        payload.get("ingredients_selector", ""),
+        payload.get("method_selector", ""),
+        int(payload.get("max_concurrency", 4)),
+        float(payload.get("request_delay", 0.8)),
         int(payload.get("max_pages", 0)),
         int(payload.get("max_recipes", 0)),
         payload.get("user_agent", "MealieRecipeCrawler/1.0"),
         datetime.datetime.utcnow().isoformat(),
-    ))
-    conn.commit()
-    conn.close()
-    return {"ok": True}
-
-
-@app.post("/api/sites/delete")
-def api_sites_delete(payload: dict = Body(...), user=Depends(current_user)):
-    site_id = payload.get("site_id")
-    if not site_id:
-        raise HTTPException(400, "site_id required")
-
-    active = get_active_site()
-    if active and active["id"] == site_id:
-        raise HTTPException(400, "Cannot delete active site")
-
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM sites WHERE id=?", (site_id,))
-    conn.commit()
-    conn.close()
-    return {"ok": True}
-
-
-@app.post("/api/sites/set-active")
-def api_sites_set_active(payload: dict = Body(...), user=Depends(current_user)):
-    raw = payload.get("site_id")
-    if raw is None or str(raw).strip() == "":
-        raise HTTPException(status_code=400, detail="site_id required")
-
-    try:
-        site_id = int(raw)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="site_id must be an integer")
-
-    conn = db()
-    cur = conn.cursor()
-
-    # Verify the site exists
-    cur.execute("SELECT id, name, start_url FROM sites WHERE id=?", (site_id,))
-    site = cur.fetchone()
-    if not site:
-        conn.close()
-        raise HTTPException(status_code=404, detail="site not found")
-
-    # Save active site id
-    cur.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_site_id', ?)",
-        (str(site_id),)
     )
+
+    if site_id:
+        cur.execute("""
+            UPDATE sites SET
+              name=?, start_url=?, recipe_pattern=?,
+              ingredients_selector=?, method_selector=?,
+              max_concurrency=?, request_delay=?,
+              max_pages=?, max_recipes=?, user_agent=?
+            WHERE id=?
+        """, fields[:-1] + (site_id,))
+    else:
+        cur.execute("""
+            INSERT INTO sites VALUES
+            (NULL,?,?,?,?,?,?,?,?,?,?,?)
+        """, fields)
+
     conn.commit()
     conn.close()
 
-    log("INFO", f"Active site set: {site['name']} (id={site_id})", url=site["start_url"], site_id=site_id)
-    return {"ok": True, "active_site_id": site_id}
+    log("INFO", "Site saved", url=payload.get("start_url"))
+    return {"ok": True}
 
 
 @app.post("/api/sites/prescan")
@@ -539,86 +433,32 @@ def api_sites_prescan(payload: dict = Body(...), user=Depends(current_user)):
         "method_selector": ".method li",
     }
 
-
 # -------------------------------------------------
-# API – Crawl (wired to active site)
+# API – Crawl (safe stub)
 # -------------------------------------------------
 @app.post("/api/crawl/start")
 def crawl_start(user=Depends(current_user)):
-    if CRAWL_STATE["running"]:
-        raise HTTPException(status_code=400, detail="Crawl already running")
-
-    conn = db()
-    site = get_active_site(conn)
-    conn.close()
-
+    site = get_active_site()
     if not site:
         raise HTTPException(status_code=400, detail="No active site selected")
 
-    t = threading.Thread(target=crawl_worker, args=(site,), daemon=True)
-    t.start()
-
-    return {"ok": True}
-    
-@app.post("/api/crawl/stop")
-def crawl_stop(user=Depends(current_user)):
-    if not CRAWL_STATE["running"]:
-        return {"ok": True}
-
-    CRAWL_STATE["running"] = False
+    log(
+        "INFO",
+        f"Crawl started for '{site['name']}' {site['start_url']}",
+        site_id=site["id"],
+        url=site["start_url"],
+    )
     return {"ok": True}
 
 
 @app.get("/api/progress")
 def api_progress(user=Depends(current_user)):
     return {
-        "crawl": {
-            "status": "running" if CRAWL_STATE["running"] else "idle",
-            "pages": CRAWL_STATE["pages"],
-            "recipes": CRAWL_STATE["recipes"],
-            "site": CRAWL_STATE["site_name"],
-        },
-        "upload": {
-            "status": "idle",
-            "done": 0,
-            "total": 0,
-        },
+        "crawl": {"status": "idle", "pages": 0, "recipes": 0},
+        "upload": {"status": "idle", "done": 0, "total": 0},
     }
 
-    
-@app.get("/api/crawl/logs")
-def api_crawl_logs(
-    after_id: int = Query(0),
-    user=Depends(current_user)
-):
-    conn = db()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT * FROM crawl_logs
-        WHERE id > ?
-        ORDER BY id ASC
-        """,
-        (after_id,)
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return {"ok": True, "logs": rows}
 
-
-
-# -------------------------------------------------
-# API – Upload (stub)
-# -------------------------------------------------
-@app.post("/api/upload/start")
-def upload_start(user=Depends(current_user)):
-    log("INFO", "Upload started")
-    return {"ok": True}
-
-
-# -------------------------------------------------
-# API – Meta
-# -------------------------------------------------
 @app.get("/api/meta")
 def api_meta():
     return {
