@@ -79,6 +79,17 @@ def db():
 def init_db():
     conn = db()
     cur = conn.cursor()
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS crawl_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id INTEGER,
+    url TEXT,
+    status TEXT,              -- queued | processing | done | error
+    discovered_at TEXT,
+    UNIQUE(site_id, url)
+    )
+    """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
@@ -218,7 +229,155 @@ def log(level, message, url=None, site_id=None):
     )
     conn.commit()
     conn.close()
+def enqueue_url(site_id, url):
+    conn = db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO crawl_queue
+            (site_id, url, status, discovered_at)
+            VALUES (?, ?, 'queued', ?)
+            """,
+            (site_id, url, datetime.datetime.utcnow().isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
+
+def get_next_url(site_id):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT id, url FROM crawl_queue
+        WHERE site_id=? AND status='queued'
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (site_id,)
+    )
+    row = cur.fetchone()
+
+    if row:
+        cur.execute(
+            "UPDATE crawl_queue SET status='processing' WHERE id=?",
+            (row["id"],)
+        )
+        conn.commit()
+
+    conn.close()
+    return row
+
+def mark_url_done(row_id):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE crawl_queue SET status='done' WHERE id=?",
+        (row_id,)
+    )
+    conn.commit()
+    conn.close()
+    
+def get_active_site():
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    cur.execute("SELECT * FROM sites WHERE id=?", (row["value"],))
+    site = cur.fetchone()
+    conn.close()
+    return site
+
+def crawl_worker():
+    site = get_active_site()
+    if not site:
+        log("ERROR", "No active site set")
+        CRAWL_STATE["status"] = "idle"
+        return
+
+    site_id = site["id"]
+    start_url = site["start_url"]
+    domain = urlparse(start_url).netloc
+
+    CRAWL_STATE.update({
+        "status": "running",
+        "pages": 0,
+        "recipes": 0,
+        "site_id": site_id,
+    })
+
+    log("INFO", f"Crawl started for '{site['name']}' {start_url}", site_id=site_id)
+
+    enqueue_url(site_id, start_url)
+
+    max_pages = site["max_pages"] or 0
+    max_recipes = site["max_recipes"] or 0
+
+    while CRAWL_STATE["status"] == "running":
+        row = get_next_url(site_id)
+        if not row:
+            break
+
+        qid = row["id"]
+        url = row["url"]
+
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": site["user_agent"]},
+                timeout=15
+            )
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            CRAWL_STATE["pages"] += 1
+
+            # Recipe detection
+            if site["recipe_pattern"] and site["recipe_pattern"] in url:
+                CRAWL_STATE["recipes"] += 1
+                conn = db()
+                conn.execute(
+                    "INSERT OR IGNORE INTO recipes (url, site_id, crawled_at) VALUES (?,?,?)",
+                    (url, site_id, datetime.datetime.utcnow().isoformat())
+                )
+                conn.commit()
+                conn.close()
+
+            # Discover links
+            for a in soup.select("a[href]"):
+                href = a["href"]
+                if href.startswith("/"):
+                    href = f"https://{domain}{href}"
+                if domain in href:
+                    enqueue_url(site_id, href)
+
+            mark_url_done(qid)
+
+            if max_pages and CRAWL_STATE["pages"] >= max_pages:
+                log("INFO", "Max pages reached", site_id=site_id)
+                break
+
+            if max_recipes and CRAWL_STATE["recipes"] >= max_recipes:
+                log("INFO", "Max recipes reached", site_id=site_id)
+                break
+
+            delay = float(site["request_delay"] or 0)
+            if delay:
+                time.sleep(delay)
+
+        except Exception as e:
+            log("ERROR", str(e), url=url, site_id=site_id)
+            mark_url_done(qid)
+
+    CRAWL_STATE["status"] = "finished"
+    log("INFO", "Crawl finished", site_id=site_id)
 
 # -------------------------------------------------
 # Pages
@@ -474,19 +633,18 @@ def api_crawl_logs(
 # -------------------------------------------------
 # API – Crawl (safe stub)
 # -------------------------------------------------
+import threading
+
 @app.post("/api/crawl/start")
 def crawl_start(user=Depends(current_user)):
-    site = get_active_site()
-    if not site:
-        raise HTTPException(status_code=400, detail="No active site selected")
+    if CRAWL_STATE["status"] == "running":
+        return {"ok": False, "message": "Crawl already running"}
 
-    log(
-        "INFO",
-        f"Crawl started for '{site['name']}' {site['start_url']}",
-        site_id=site["id"],
-        url=site["start_url"],
-    )
+    t = threading.Thread(target=crawl_worker, daemon=True)
+    t.start()
+
     return {"ok": True}
+
 
 
 @app.get("/api/progress")
