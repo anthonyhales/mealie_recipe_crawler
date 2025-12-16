@@ -6,6 +6,15 @@
   <div class="small text-muted">Active site: <b>{{ active_site.name if active_site else "None" }}</b></div>
 </div>
 
+<div class="alert alert-info">
+  <strong>Active site:</strong>
+  {% if active_site %}
+    {{ active_site.name }} — {{ active_site.start_url }}
+  {% else %}
+    <em>No site selected</em>
+  {% endif %}
+</div>
+
 <div class="row">
   <div class="col-xl-4 col-md-6 mb-4">
     <div class="card border-left-primary shadow h-100 py-2">
