@@ -6,6 +6,7 @@ import threading
 import time
 from collections import deque
 from urllib.parse import urlparse, urljoin
+import re
 
 import bcrypt
 import requests
