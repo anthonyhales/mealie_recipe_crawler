@@ -286,39 +286,50 @@ def dashboard(request: Request, user=Depends(current_user)):
     conn = db()
     cur = conn.cursor()
 
+    # Active site
+    cur.execute(
+        """
+        SELECT s.*
+        FROM sites s
+        JOIN settings st ON st.value = CAST(s.id AS TEXT)
+        WHERE st.key = 'active_site_id'
+        """
+    )
+    site = cur.fetchone()
+
+    # Recipe counts
     cur.execute("SELECT COUNT(*) c FROM recipes")
     total = cur.fetchone()["c"]
 
-    cur.execute("SELECT COUNT(*) c FROM recipes WHERE uploaded=1")
+    cur.execute("SELECT COUNT(*) c FROM recipes WHERE uploaded = 1")
     uploaded = cur.fetchone()["c"]
 
-    site = get_active_site(conn)
     conn.close()
 
-return templates.TemplateResponse(
-    "dashboard.html",
-    {
-        "request": request,
-        "user": user,
-        "site": site,
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "user": user,
+            "site": site,
 
-        # REQUIRED by template
-        "crawl": {
-            "status": "idle",
-            "pages": 0,
-            "recipes": total,
-        },
-        "upload": {
-            "status": "idle",
-            "done": uploaded,
-            "total": total,
-        },
+            # REQUIRED by dashboard.html
+            "crawl": {
+                "status": "idle",
+                "pages": 0,
+                "recipes": total,
+            },
+            "upload": {
+                "status": "idle",
+                "done": uploaded,
+                "total": total,
+            },
 
-        # Counters
-        "total_recipes": total,
-        "uploaded_recipes": uploaded,
-    },
-)
+            "total_recipes": total,
+            "uploaded_recipes": uploaded,
+        },
+    )
+
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, user=Depends(current_user)):
