@@ -329,6 +329,94 @@ def dashboard(request: Request, user=Depends(current_user)):
             "active_site": site,
         },
     )
+    
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request, user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT key, value FROM settings")
+    settings = {r["key"]: r["value"] for r in cur.fetchall()}
+
+    cur.execute("SELECT * FROM sites ORDER BY id ASC")
+    sites = cur.fetchall()
+
+    active_site = get_active_site()
+
+    conn.close()
+
+    return templates.TemplateResponse(
+        "settings.html",
+        {
+            "request": request,
+            "user": user,
+            "settings": settings,
+            "sites": sites,
+            "active_site": active_site,
+        },
+    )
+    
+@app.get("/recipes", response_class=HTMLResponse)
+def recipes_page(
+    request: Request,
+    user=Depends(current_user),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=10, le=200),
+):
+    offset = (page - 1) * page_size
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) c FROM recipes")
+    total = cur.fetchone()["c"]
+
+    cur.execute(
+        """
+        SELECT * FROM recipes
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (page_size, offset),
+    )
+    recipes = cur.fetchall()
+
+    conn.close()
+
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
+    return templates.TemplateResponse(
+        "recipes.html",
+        {
+            "request": request,
+            "user": user,
+            "recipes": recipes,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        },
+    )
+
+@app.get("/crawl-logs", response_class=HTMLResponse)
+def crawl_logs_page(request: Request, user=Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM crawl_logs ORDER BY id DESC LIMIT 500")
+    logs = cur.fetchall()[::-1]
+
+    conn.close()
+
+    return templates.TemplateResponse(
+        "crawl_logs.html",
+        {
+            "request": request,
+            "user": user,
+            "logs": logs,
+        },
+    )
+
 
 # -------------------------------------------------
 # API – Progress
