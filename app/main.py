@@ -295,21 +295,30 @@ def dashboard(request: Request, user=Depends(current_user)):
     site = get_active_site(conn)
     conn.close()
 
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
-            "user": user,
-            "crawl": {
-                "status": "running" if CRAWL_STATE["running"] else "idle",
-                "pages": CRAWL_STATE["pages"],
-                "recipes": CRAWL_STATE["recipes"],
-            },
-            "active_site": site,
-            "total_recipes": total,
-            "uploaded_recipes": uploaded,
+return templates.TemplateResponse(
+    "dashboard.html",
+    {
+        "request": request,
+        "user": user,
+        "site": site,
+
+        # REQUIRED by template
+        "crawl": {
+            "status": "idle",
+            "pages": 0,
+            "recipes": total,
         },
-    )
+        "upload": {
+            "status": "idle",
+            "done": uploaded,
+            "total": total,
+        },
+
+        # Counters
+        "total_recipes": total,
+        "uploaded_recipes": uploaded,
+    },
+)
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, user=Depends(current_user)):
