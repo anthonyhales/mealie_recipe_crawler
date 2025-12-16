@@ -193,18 +193,17 @@ def log(level, message, url=None, site_id=None):
 # -------------------------------------------------
 # Helpers
 # -------------------------------------------------
-def get_active_site():
-    conn = db()
+def get_active_site(conn):
     cur = conn.cursor()
+
     cur.execute("SELECT value FROM settings WHERE key='active_site_id'")
     row = cur.fetchone()
     if not row:
-        conn.close()
         return None
-    cur.execute("SELECT * FROM sites WHERE id=?", (int(row["value"]),))
-    site = cur.fetchone()
-    conn.close()
-    return site
+
+    cur.execute("SELECT * FROM sites WHERE id=?", (row["value"],))
+    return cur.fetchone()
+
 
 
 def validate_selectors(html, ingredients_sel, method_sel):
