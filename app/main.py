@@ -459,6 +459,45 @@ def crawl_stop(user=Depends(current_user)):
     crawl_state["running"] = False
     log("INFO", "Crawl stopped")
     return {"ok": True}
+    
+@app.get("/api/crawl/logs")
+def api_crawl_logs(
+    after_id: int = Query(0, ge=0),
+    user=Depends(current_user),
+):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT id, level, message, url, created_at
+        FROM crawl_logs
+        WHERE id > ?
+        ORDER BY id ASC
+        LIMIT 200
+        """,
+        (after_id,),
+    )
+
+    rows = cur.fetchall()
+    conn.close()
+
+    logs = [
+        {
+            "id": r["id"],
+            "level": r["level"],
+            "message": r["message"],
+            "url": r["url"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+    return {
+        "ok": True,
+        "logs": logs,
+        "last_id": logs[-1]["id"] if logs else after_id,
+    }
 
 # -------------------------------------------------
 # API – Meta
