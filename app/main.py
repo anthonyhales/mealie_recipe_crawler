@@ -6,7 +6,8 @@ from urllib.parse import urlparse
 
 import bcrypt
 from bs4 import BeautifulSoup
-
+import threading
+import time
 
 from fastapi import (
     FastAPI, Request, Form, Depends, Body, HTTPException, Query
@@ -20,6 +21,9 @@ from starlette.middleware.sessions import SessionMiddleware
 
 CRAWL_STATE = {
     "running": False,
+    "site_id": None,
+    "site_name": None,
+    "start_url": None,
     "pages": 0,
     "recipes": 0,
     "started_at": None,
@@ -206,7 +210,43 @@ def get_active_site():
 def validate_selectors(html, ingredients_sel, method_sel):
     soup = BeautifulSoup(html, "lxml")
     return bool(soup.select(ingredients_sel)) and bool(soup.select(method_sel))
+    
+def crawl_worker(site):
+    CRAWL_STATE["running"] = True
+    CRAWL_STATE["site_id"] = site["id"]
+    CRAWL_STATE["site_name"] = site["name"]
+    CRAWL_STATE["start_url"] = site["start_url"]
+    CRAWL_STATE["pages"] = 0
+    CRAWL_STATE["recipes"] = 0
+    CRAWL_STATE["started_at"] = datetime.datetime.utcnow().isoformat()
 
+    log(
+        "INFO",
+        f"Crawl started for site '{site['name']}' {site['start_url']}",
+        site_id=site["id"],
+        url=site["start_url"],
+    )
+
+    # ---- PLACEHOLDER LOOP ----
+    # This is where your real crawler logic will go
+    # For now, simulate work safely
+
+    try:
+        for i in range(1, 6):
+            if not CRAWL_STATE["running"]:
+                log("INFO", "Crawl stopped by user", site_id=site["id"])
+                return
+
+            time.sleep(site["request_delay"])
+            CRAWL_STATE["pages"] += 1
+
+            # fake recipe found every 2 pages
+            if i % 2 == 0:
+                CRAWL_STATE["recipes"] += 1
+
+        log("INFO", "Crawl finished", site_id=site["id"])
+    finally:
+        CRAWL_STATE["running"] = False
 
 # -------------------------------------------------
 # Pages
@@ -253,6 +293,7 @@ def dashboard(request: Request, user=Depends(current_user)):
     cur.execute("SELECT COUNT(*) c FROM recipes WHERE uploaded=1")
     uploaded = cur.fetchone()["c"]
 
+    site = get_active_site(conn)
     conn.close()
 
     return templates.TemplateResponse(
@@ -260,19 +301,12 @@ def dashboard(request: Request, user=Depends(current_user)):
         {
             "request": request,
             "user": user,
-
-            # 👇 REQUIRED by dashboard.html
             "crawl": {
-                "status": "idle",
-                "pages": 0,
-                "recipes": total,
+                "status": "running" if CRAWL_STATE["running"] else "idle",
+                "pages": CRAWL_STATE["pages"],
+                "recipes": CRAWL_STATE["recipes"],
             },
-            "upload": {
-                "status": "idle",
-                "done": uploaded,
-                "total": total,
-            },
-
+            "active_site": site,
             "total_recipes": total,
             "uploaded_recipes": uploaded,
         },
@@ -493,24 +527,28 @@ def api_sites_prescan(payload: dict = Body(...), user=Depends(current_user)):
 @app.post("/api/crawl/start")
 def crawl_start(user=Depends(current_user)):
     if CRAWL_STATE["running"]:
-        return {"ok": True, "message": "Crawl already running"}
+        raise HTTPException(status_code=400, detail="Crawl already running")
 
-    CRAWL_STATE["running"] = True
-    CRAWL_STATE["pages"] = 0
-    CRAWL_STATE["recipes"] = 0
-    CRAWL_STATE["started_at"] = datetime.datetime.utcnow().isoformat()
+    conn = db()
+    site = get_active_site(conn)
+    conn.close()
 
-    log("INFO", "Crawl started")
+    if not site:
+        raise HTTPException(status_code=400, detail="No active site selected")
+
+    t = threading.Thread(target=crawl_worker, args=(site,), daemon=True)
+    t.start()
+
     return {"ok": True}
-
+    
 @app.post("/api/crawl/stop")
 def crawl_stop(user=Depends(current_user)):
     if not CRAWL_STATE["running"]:
-        return {"ok": True, "message": "Crawl not running"}
+        return {"ok": True}
 
     CRAWL_STATE["running"] = False
-    log("INFO", "Crawl stopped")
     return {"ok": True}
+
 
 @app.get("/api/progress")
 def api_progress(user=Depends(current_user)):
@@ -519,13 +557,15 @@ def api_progress(user=Depends(current_user)):
             "status": "running" if CRAWL_STATE["running"] else "idle",
             "pages": CRAWL_STATE["pages"],
             "recipes": CRAWL_STATE["recipes"],
+            "site": CRAWL_STATE["site_name"],
         },
         "upload": {
             "status": "idle",
             "done": 0,
             "total": 0,
-        }
+        },
     }
+
     
 @app.get("/api/crawl/logs")
 def api_crawl_logs(
