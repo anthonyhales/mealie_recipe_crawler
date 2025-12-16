@@ -20,6 +20,16 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 # -------------------------------------------------
+# Crawl state (in-memory, per container)
+# -------------------------------------------------
+CRAWL_STATE = {
+    "status": "idle",        # idle | running | stopped | finished
+    "pages": 0,
+    "recipes": 0,
+    "site_id": None,
+}
+
+# -------------------------------------------------
 # Paths / Environment
 # -------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -482,9 +492,18 @@ def crawl_start(user=Depends(current_user)):
 @app.get("/api/progress")
 def api_progress(user=Depends(current_user)):
     return {
-        "crawl": {"status": "idle", "pages": 0, "recipes": 0},
-        "upload": {"status": "idle", "done": 0, "total": 0},
+        "crawl": {
+            "status": CRAWL_STATE["status"],
+            "pages": CRAWL_STATE["pages"],
+            "recipes": CRAWL_STATE["recipes"],
+        },
+        "upload": {
+            "status": "idle",
+            "done": 0,
+            "total": 0,
+        },
     }
+
 
 
 @app.get("/api/meta")
