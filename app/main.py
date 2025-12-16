@@ -432,6 +432,34 @@ def api_sites_prescan(payload: dict = Body(...), user=Depends(current_user)):
         "ingredients_selector": ".ingredients li",
         "method_selector": ".method li",
     }
+    
+@app.get("/api/crawl/logs")
+def api_crawl_logs(
+    after_id: int = Query(0, ge=0),
+    user=Depends(current_user)
+):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT id, site_id, level, message, url, created_at
+        FROM crawl_logs
+        WHERE id > ?
+        ORDER BY id ASC
+        LIMIT 200
+        """,
+        (after_id,)
+    )
+
+    logs = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    return {
+        "ok": True,
+        "logs": logs,
+        "last_id": logs[-1]["id"] if logs else after_id,
+    }
 
 # -------------------------------------------------
 # API – Crawl (safe stub)
